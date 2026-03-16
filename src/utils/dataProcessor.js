@@ -480,3 +480,6 @@ export function getUniqueConnectors(records){
   return Array.from(set).sort();
 
 }
+export function parseExcelFile(file){
+  return processExcelFile(file);
+}

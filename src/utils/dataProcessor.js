@@ -240,3 +240,31 @@ export function applyFilters(fullAnalytics,filters={}){
   return computeAnalytics(filtered);
 
 }
+export function getConnectorByTenant(records){
+
+  const map = {};
+
+  records.forEach(r=>{
+
+    const tenant = r.tenantName || r.oid || 'Unknown';
+    const connector = r.connector || 'Unknown';
+
+    if(!map[tenant])
+      map[tenant] = {};
+
+    map[tenant][connector] =
+      (map[tenant][connector] || 0) + r.calls;
+
+  });
+
+  return Object.keys(map).map(tenant=>({
+
+    tenant,
+
+    connectors: Object.entries(map[tenant])
+      .map(([name,calls])=>({name,calls}))
+      .sort((a,b)=>b.calls-a.calls)
+
+  }));
+
+}

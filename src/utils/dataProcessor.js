@@ -331,3 +331,31 @@ export function getDayOfWeekAvg(records){
   }));
 
 }
+export function detectSpikes(records){
+
+  if(!records || !records.length) return [];
+
+  const daily = {};
+
+  records.forEach(r=>{
+    daily[r.date] = (daily[r.date] || 0) + r.calls;
+  });
+
+  const values = Object.values(daily);
+
+  const mean =
+    values.reduce((s,v)=>s+v,0) / values.length;
+
+  const variance =
+    values.reduce((s,v)=>s + Math.pow(v-mean,2),0) / values.length;
+
+  const stdDev = Math.sqrt(variance);
+
+  return Object.entries(daily)
+    .filter(([date,calls]) => calls > mean + 2.5 * stdDev)
+    .map(([date,calls]) => ({
+      date,
+      calls
+    }));
+
+}

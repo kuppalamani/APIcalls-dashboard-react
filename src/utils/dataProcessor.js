@@ -268,3 +268,36 @@ export function getConnectorByTenant(records){
   }));
 
 }
+export function getHeatmapData(records){
+
+  if(!records || !records.length) return [];
+
+  const map = {};
+
+  records.forEach(r=>{
+
+    const tenant = r.tenantName || r.oid || 'Unknown';
+    const date = r.date;
+
+    if(!map[tenant])
+      map[tenant] = {};
+
+    map[tenant][date] =
+      (map[tenant][date] || 0) + r.calls;
+
+  });
+
+  return Object.keys(map).map(tenant=>({
+
+    tenant,
+
+    dates: Object.entries(map[tenant])
+      .map(([date,calls])=>({
+        date,
+        calls
+      }))
+      .sort((a,b)=>a.date.localeCompare(b.date))
+
+  }));
+
+}

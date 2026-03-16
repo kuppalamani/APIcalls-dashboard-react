@@ -95,7 +95,7 @@ export function processExcelFile(file) {
 
         });
 
-        const analytics = computeAnalytics(records, dateCols);
+        const analytics = computeAnalytics(records);
 
         resolve(analytics);
 
@@ -113,79 +113,15 @@ export function processExcelFile(file) {
 
 function computeAnalytics(records) {
 
-  const allDates = [...new Set(records.map(r => r.date))].sort();
-
-  const minDate = allDates[0];
-  const maxDate = allDates[allDates.length - 1];
-
-  const dailyMap = {};
-
-  records.forEach(r => {
-    dailyMap[r.date] = (dailyMap[r.date] || 0) + r.calls;
-  });
-
-  const dailyData = allDates.map(date => ({
-    date,
-    calls: dailyMap[date] || 0,
-    displayDate: formatDisplayDate(date)
-  }));
-
-  const monthlyMap = {};
-
-  records.forEach(r => {
-    const m = r.date.substring(0, 7);
-    monthlyMap[m] = (monthlyMap[m] || 0) + r.calls;
-  });
-
-  const monthlyData =
-    Object.entries(monthlyMap)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, calls]) => ({
-        month,
-        calls,
-        displayMonth: formatMonth(month)
-      }));
-
-  const tenantMap = {};
-
-  records.forEach(r => {
-
-    const key = r.tenantName || r.oid || 'Unknown';
-
-    if (!tenantMap[key])
-      tenantMap[key] = { name: key, calls: 0, email: r.email };
-
-    tenantMap[key].calls += r.calls;
-
-  });
-
-  const topTenants =
-    Object.values(tenantMap)
-      .sort((a, b) => b.calls - a.calls);
-
-  const connectorMap = {};
-
-  records.forEach(r => {
-    const key = r.connector || 'Unknown';
-    connectorMap[key] = (connectorMap[key] || 0) + r.calls;
-  });
-
-  const topConnectors =
-    Object.entries(connectorMap)
-      .sort(([, a], [, b]) => b - a)
-      .map(([name, calls]) => ({ name, calls }));
-
   const kpis = computeKPIs(records);
+  const { minDate, maxDate } = getDateRange(records);
+  const dailyTrend = getDailyTrend(records);
 
   return {
     ...kpis,
     minDate,
     maxDate,
-    allDates,
-    dailyData,
-    monthlyData,
-    topTenants,
-    topConnectors,
+    dailyTrend,
     records
   };
 }
@@ -237,6 +173,24 @@ export function getDateRange(records) {
   };
 }
 
+export function getDailyTrend(records) {
+
+  if (!records || !records.length) return [];
+
+  const dailyMap = {};
+
+  records.forEach(r => {
+    dailyMap[r.date] = (dailyMap[r.date] || 0) + r.calls;
+  });
+
+  const dates = Object.keys(dailyMap).sort();
+
+  return dates.map(date => ({
+    date,
+    calls: dailyMap[date]
+  }));
+}
+
 export function applyFilters(fullAnalytics, filters = {}) {
 
   const {
@@ -270,36 +224,4 @@ export function applyFilters(fullAnalytics, filters = {}) {
   if (!filtered.length) return null;
 
   return computeAnalytics(filtered);
-}
-
-function formatDisplayDate(date) {
-
-  try {
-    const d = new Date(date + 'T00:00:00');
-
-    return d.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric'
-    });
-
-  } catch {
-    return date;
-  }
-}
-
-function formatMonth(month) {
-
-  try {
-    const [y, m] = month.split('-');
-
-    const d = new Date(Number(y), Number(m) - 1, 1);
-
-    return d.toLocaleDateString('en-US', {
-      month: 'short',
-      year: 'numeric'
-    });
-
-  } catch {
-    return month;
-  }
 }

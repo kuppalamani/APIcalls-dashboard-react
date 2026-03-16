@@ -270,7 +270,7 @@ export default function App() {
                 <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 10, color: '#475569' }} />
-                {connTrend.connectors.map((conn, i) => (
+               {connTrend?.connectors?.map((conn, i) => (
                   <Line key={conn} type="monotone" dataKey={conn} stroke={COLORS[i % COLORS.length]} strokeWidth={1.5} dot={false} />
                 ))}
               </LineChart>

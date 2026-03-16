@@ -466,3 +466,17 @@ export function getUniqueTenants(records){
   return Array.from(set).sort();
 
 }
+export function getUniqueConnectors(records){
+
+  if(!records || !records.length) return [];
+
+  const set = new Set();
+
+  records.forEach(r=>{
+    const connector = r.connector || 'Unknown';
+    set.add(connector);
+  });
+
+  return Array.from(set).sort();
+
+}

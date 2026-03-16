@@ -452,3 +452,17 @@ export function getConnectorTrend(records){
   }));
 
 }
+export function getUniqueTenants(records){
+
+  if(!records || !records.length) return [];
+
+  const set = new Set();
+
+  records.forEach(r=>{
+    const name = r.tenantName || r.oid || 'Unknown';
+    set.add(name);
+  });
+
+  return Array.from(set).sort();
+
+}

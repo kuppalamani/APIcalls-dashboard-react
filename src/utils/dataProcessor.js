@@ -1,18 +1,18 @@
 import * as XLSX from 'xlsx';
 
-function parseDateCol(colName) {
-  const match = String(colName).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
-  if (!match) return null;
+function parseDateCol(colName){
+  const m = String(colName).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if(!m) return null;
 
-  const day = match[1].padStart(2,'0');
-  const month = match[2].padStart(2,'0');
-  const year = '20' + match[3];
+  const d = m[1].padStart(2,'0');
+  const mth = m[2].padStart(2,'0');
+  const y = '20'+m[3];
 
-  return `${year}-${month}-${day}`;
+  return `${y}-${mth}-${d}`;
 }
 
-function isDateColumn(colName){
-  return parseDateCol(colName) !== null;
+function isDateColumn(col){
+  return parseDateCol(col) !== null;
 }
 
 export function processExcelFile(file){
@@ -26,50 +26,44 @@ export function processExcelFile(file){
       try{
 
         const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data,{type:'array'});
+        const wb = XLSX.read(data,{type:'array'});
 
-        const mappingSheetName = workbook.SheetNames[0];
-        const usageSheetName = workbook.SheetNames[1];
+        const mapSheet = wb.Sheets[wb.SheetNames[0]];
+        const usageSheet = wb.Sheets[wb.SheetNames[1]];
 
-        const mappingSheet = workbook.Sheets[mappingSheetName];
-        const mappingRaw = XLSX.utils.sheet_to_json(mappingSheet,{defval:''});
+        const mapRows = XLSX.utils.sheet_to_json(mapSheet,{defval:''});
+        const usageRows = XLSX.utils.sheet_to_json(usageSheet,{defval:0});
 
-        const oidToEmail = {};
-
-        mappingRaw.forEach(r=>{
+        const oidEmail = {};
+        mapRows.forEach(r=>{
           const oid = String(r['oid']||'').trim();
           const email = String(r['email']||'').trim();
-          if(oid) oidToEmail[oid] = email;
+          if(oid) oidEmail[oid]=email;
         });
 
-        const usageSheet = workbook.Sheets[usageSheetName];
-        const usageRaw = XLSX.utils.sheet_to_json(usageSheet,{defval:0});
-
-        const cols = Object.keys(usageRaw[0]);
+        const cols = Object.keys(usageRows[0]);
         const dateCols = cols.filter(isDateColumn);
 
-        const records = [];
+        const records=[];
 
-        usageRaw.forEach(row=>{
+        usageRows.forEach(row=>{
 
           const connector = String(row['Connector']||'').trim();
           const oid = String(row['oid']||'').trim();
           const tenantName = String(row['Tenant Name']||'').trim();
-          const email = oidToEmail[oid] || '';
+          const email = oidEmail[oid] || '';
 
           dateCols.forEach(col=>{
 
-            const isoDate = parseDateCol(col);
-            if(!isoDate) return;
+            const iso = parseDateCol(col);
+            if(!iso) return;
 
-            const rawVal = row[col];
-            const calls = typeof rawVal === 'number'
-              ? rawVal
-              : parseFloat(rawVal)||0;
+            const raw = row[col];
+            const calls = typeof raw==='number'?raw:parseFloat(raw)||0;
 
             if(calls>0){
               records.push({
-                date:isoDate,
+                date:iso,
                 connector,
                 tenantName,
                 oid,
@@ -98,16 +92,13 @@ export function processExcelFile(file){
 
 function computeAnalytics(records){
 
-  const kpis = computeKPIs(records);
-  const range = getDateRange(records);
-  const dailyTrend = getDailyTrend(records);
-  const monthlyTrend = getMonthlyTrend(records);
-
-  return {
-    ...kpis,
-    ...range,
-    dailyTrend,
-    monthlyTrend,
+  return{
+    ...computeKPIs(records),
+    ...getDateRange(records),
+    dailyTrend:getDailyTrend(records),
+    monthlyTrend:getMonthlyTrend(records),
+    topTenants:getTopTenants(records),
+    topConnectors:getTopConnectors(records),
     records
   };
 
@@ -115,7 +106,7 @@ function computeAnalytics(records){
 
 export function computeKPIs(records){
 
-  if(!records || !records.length){
+  if(!records.length){
     return{
       totalCalls:0,
       dailyAverage:0,
@@ -126,32 +117,22 @@ export function computeKPIs(records){
 
   const totalCalls = records.reduce((s,r)=>s+r.calls,0);
 
-  const activeTenants =
-    new Set(records.map(r=>r.tenantName||r.oid)).size;
-
-  const activeConnectors =
-    new Set(records.map(r=>r.connector)).size;
-
-  const uniqueDates =
-    [...new Set(records.map(r=>r.date))];
-
-  const dailyAverage =
-    Math.round(totalCalls/uniqueDates.length);
+  const tenants = new Set(records.map(r=>r.tenantName||r.oid));
+  const connectors = new Set(records.map(r=>r.connector));
+  const dates = new Set(records.map(r=>r.date));
 
   return{
     totalCalls,
-    dailyAverage,
-    activeTenants,
-    activeConnectors
+    dailyAverage:Math.round(totalCalls/dates.size),
+    activeTenants:tenants.size,
+    activeConnectors:connectors.size
   };
 
 }
 
 export function getDateRange(records){
 
-  if(!records || !records.length){
-    return {minDate:null,maxDate:null};
-  }
+  if(!records.length) return {minDate:null,maxDate:null};
 
   const dates = records.map(r=>r.date).sort();
 
@@ -164,9 +145,7 @@ export function getDateRange(records){
 
 export function getDailyTrend(records){
 
-  if(!records || !records.length) return [];
-
-  const map = {};
+  const map={};
 
   records.forEach(r=>{
     map[r.date]=(map[r.date]||0)+r.calls;
@@ -174,37 +153,61 @@ export function getDailyTrend(records){
 
   return Object.keys(map)
     .sort()
-    .map(date=>({
-      date,
-      calls:map[date]
-    }));
+    .map(d=>({date:d,calls:map[d]}));
 
 }
 
 export function getMonthlyTrend(records){
 
-  if(!records || !records.length) return [];
-
-  const map = {};
+  const map={};
 
   records.forEach(r=>{
-
-    const month = r.date.substring(0,7);
-
-    map[month]=(map[month]||0)+r.calls;
-
+    const m = r.date.substring(0,7);
+    map[m]=(map[m]||0)+r.calls;
   });
 
   return Object.keys(map)
     .sort()
-    .map(month=>({
-      month,
-      calls:map[month]
-    }));
+    .map(m=>({month:m,calls:map[m]}));
+
+}
+
+export function getTopTenants(records){
+
+  const map={};
+
+  records.forEach(r=>{
+    const key = r.tenantName || r.oid || 'Unknown';
+
+    if(!map[key])
+      map[key]={name:key,calls:0,email:r.email};
+
+    map[key].calls += r.calls;
+  });
+
+  return Object.values(map)
+    .sort((a,b)=>b.calls-a.calls);
+
+}
+
+export function getTopConnectors(records){
+
+  const map={};
+
+  records.forEach(r=>{
+    const key = r.connector || 'Unknown';
+    map[key]=(map[key]||0)+r.calls;
+  });
+
+  return Object.entries(map)
+    .map(([name,calls])=>({name,calls}))
+    .sort((a,b)=>b.calls-a.calls);
 
 }
 
 export function applyFilters(fullAnalytics,filters={}){
+
+  let filtered = fullAnalytics.records;
 
   const{
     tenantName=null,
@@ -214,22 +217,20 @@ export function applyFilters(fullAnalytics,filters={}){
     emailSearch=''
   }=filters;
 
-  let filtered = fullAnalytics.records;
-
   if(tenantName)
-    filtered = filtered.filter(r=>r.tenantName===tenantName);
+    filtered=filtered.filter(r=>r.tenantName===tenantName);
 
   if(connectorName)
-    filtered = filtered.filter(r=>r.connector===connectorName);
+    filtered=filtered.filter(r=>r.connector===connectorName);
 
   if(startDate)
-    filtered = filtered.filter(r=>r.date>=startDate);
+    filtered=filtered.filter(r=>r.date>=startDate);
 
   if(endDate)
-    filtered = filtered.filter(r=>r.date<=endDate);
+    filtered=filtered.filter(r=>r.date<=endDate);
 
   if(emailSearch)
-    filtered = filtered.filter(r=>
+    filtered=filtered.filter(r=>
       r.email.toLowerCase().includes(emailSearch.toLowerCase()) ||
       r.tenantName.toLowerCase().includes(emailSearch.toLowerCase())
     );

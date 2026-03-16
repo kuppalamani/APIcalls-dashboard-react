@@ -359,3 +359,38 @@ export function detectSpikes(records){
     }));
 
 }
+export function segmentTenants(records){
+
+  if(!records || !records.length) return [];
+
+  const tenantMap = {};
+
+  records.forEach(r=>{
+
+    const key = r.tenantName || r.oid || 'Unknown';
+
+    if(!tenantMap[key])
+      tenantMap[key] = { name:key, calls:0 };
+
+    tenantMap[key].calls += r.calls;
+
+  });
+
+  const tenants = Object.values(tenantMap);
+
+  return tenants.map(t=>{
+
+    let segment = 'Low';
+
+    if(t.calls > 100000) segment = 'High';
+    else if(t.calls > 10000) segment = 'Medium';
+
+    return {
+      name: t.name,
+      calls: t.calls,
+      segment
+    };
+
+  });
+
+}

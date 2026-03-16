@@ -419,3 +419,36 @@ export function getActiveTenants(records){
     .sort((a,b)=>b.calls-a.calls);
 
 }
+export function getConnectorTrend(records){
+
+  if(!records || !records.length) return [];
+
+  const map = {};
+
+  records.forEach(r=>{
+
+    const connector = r.connector || 'Unknown';
+    const date = r.date;
+
+    if(!map[connector])
+      map[connector] = {};
+
+    map[connector][date] =
+      (map[connector][date] || 0) + r.calls;
+
+  });
+
+  return Object.keys(map).map(connector=>({
+
+    connector,
+
+    trend: Object.entries(map[connector])
+      .map(([date,calls])=>({
+        date,
+        calls
+      }))
+      .sort((a,b)=>a.date.localeCompare(b.date))
+
+  }));
+
+}

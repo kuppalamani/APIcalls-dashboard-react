@@ -1,718 +1,385 @@
-import { useState, useMemo, useCallback, useRef } from "react";
-import * as XLSX from "xlsx";
+// src/App.jsx
+import React, { useState, useMemo, useCallback } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell
-} from "recharts";
-import {
-  Upload, Activity, Users, Plug, TrendingUp,
-  Download, Sparkles, Search, ChevronUp, ChevronDown, X
-} from "lucide-react";
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ComposedChart, Area,
+} from 'recharts';
 
-// ── Palette ───────────────────────────────────────────────────────────────────
-const C = {
-  bg: "#050d1a",
-  panel: "#0a1628",
-  border: "#132040",
-  cyan: "#00c8ff",
-  green: "#00e5a0",
-  amber: "#ffb800",
-  magenta: "#ff4d8f",
-  text: "#b8cfe8",
-  white: "#e8f2ff",
-  muted: "#4a6a8a",
+import Sidebar from './components/Sidebar';
+import KPICards from './components/KPICards';
+import ChartCard, { SectionHeader } from './components/ChartCard';
+import Heatmap from './components/Heatmap';
+import { parseExcelFile, computeKPIs, getDailyTrend, getMonthlyTrend, getTopTenants, getTopConnectors, getConnectorByTenant, getHeatmapData, getDayOfWeekAvg, detectSpikes, segmentTenants, getActiveTenants, getConnectorTrend, getUniqueTenants, getUniqueConnectors, getDateRange } from './utils/dataProcessor';
+import { generateDemoData } from './utils/demoData';
+
+// ── Constants ────────────────────────────────────────────────────
+const COLORS = ['#00e5ff','#a78bfa','#34d399','#fbbf24','#f87171','#38bdf8','#fb7185','#4ade80','#c084fc','#facc15'];
+
+const CHART_THEME = {
+  background: 'transparent',
+  gridColor: '#1e293b',
+  textColor: '#475569',
+  tooltipBg: '#0d1526',
+  tooltipBorder: '#1e293b',
 };
 
-const CONNECTOR_COLORS = [
-  "#00c8ff","#00e5a0","#ffb800","#ff4d8f",
-  "#a78bfa","#fb923c","#34d399","#f472b6","#60a5fa","#fbbf24"
-];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const fmtK = n =>
-  n >= 1e6 ? (n / 1e6).toFixed(2) + "M" :
-  n >= 1e3 ? (n / 1e3).toFixed(1) + "K" :
-  (n || 0).toLocaleString();
-
-const connectorKey = (raw = "") => {
-  const m = raw.match(/MS_([^_]+(?:v\d+)?(?:_live)?)/i);
-  if (m) return m[1].replace("_live", "");
-  if (raw.startsWith("OPENAPI_")) return "OPENAPI workforceNow";
-  return raw.split("_")[0] || raw;
-};
-
-// ── Excel Parser ──────────────────────────────────────────────────────────────
-function parseExcel(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target.result);
-        const wb = XLSX.read(data, { type: "array" });
-
-        const sheetName =
-          wb.SheetNames.find(n => n.toLowerCase().includes("tenant")) ||
-          wb.SheetNames[0];
-
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: 0 });
-
-        if (!rows.length) throw new Error("No data found in sheet");
-
-        const allKeys = Object.keys(rows[0]);
-        const fixedCols = allKeys.slice(0, 3);
-        const dateCols = allKeys.slice(3);
-
-        resolve({ rows, fixedCols, dateCols, sheetName, allSheets: wb.SheetNames });
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-// ── Spark Bars ────────────────────────────────────────────────────────────────
-function SparkBars({ values }) {
-  const max = Math.max(...values, 1);
-  const isUp = values[values.length - 1] >= values[0];
-  const color = isUp ? C.green : C.magenta;
+const CustomTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 20 }}>
-      {values.slice(-3).map((v, i) => (
-        <div
-          key={i}
-          style={{
-            width: 6,
-            height: Math.max(3, (v / max) * 20),
-            background: color,
-            borderRadius: 2,
-            opacity: 0.5 + i * 0.25,
-          }}
-        />
+    <div style={{ background: CHART_THEME.tooltipBg, border: `1px solid ${CHART_THEME.tooltipBorder}`, borderRadius: 8, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ fontSize: 12, color: p.color, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+          <span>{p.name}</span>
+          <span style={{ fontFamily: 'JetBrains Mono', fontWeight: 600 }}>{Number(p.value).toLocaleString()}</span>
+        </div>
       ))}
     </div>
   );
-}
+};
 
-// ── Upload Screen ─────────────────────────────────────────────────────────────
-function UploadScreen({ onData }) {
-  const [dragging, setDragging] = useState(false);
+// ── App ──────────────────────────────────────────────────────────
+export default function App() {
+  const [rawData, setRawData] = useState(null);
+  const [isDemo, setIsDemo] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const inputRef = useRef();
+  const [error, setError] = useState('');
 
-  const handle = useCallback(async (file) => {
+  // Filters
+  const [selTenants, setSelTenants] = useState([]);
+  const [selConnectors, setSelConnectors] = useState([]);
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [emailSearch, setEmailSearch] = useState('');
+  const [spikeZ, setSpikeZ] = useState(2.5);
+  const [topN, setTopN] = useState(10);
+
+  // Load demo on first render
+  const demoData = useMemo(() => generateDemoData(), []);
+  const baseData = rawData || demoData;
+
+  // Date boundaries
+  const { min: absMin, max: absMax } = useMemo(() => getDateRange(baseData), [baseData]);
+
+  // Apply filters
+  const filtered = useMemo(() => {
+    let d = baseData;
+    if (selTenants.length) d = d.filter(r => selTenants.includes(r['Tenant Name']));
+    if (selConnectors.length) d = d.filter(r => selConnectors.includes(r['Connector Name']));
+    const start = dateRange.start || absMin;
+    const end = dateRange.end || absMax;
+    if (start) d = d.filter(r => r.DateStr >= start);
+    if (end) d = d.filter(r => r.DateStr <= end);
+    if (emailSearch) d = d.filter(r => (r['Customer Email'] || '').toLowerCase().includes(emailSearch.toLowerCase()));
+    return d;
+  }, [baseData, selTenants, selConnectors, dateRange, emailSearch, absMin, absMax]);
+
+  // All analytics derived from filtered data
+  const metrics = useMemo(() => computeKPIs(filtered), [filtered]);
+  const dailyTrend = useMemo(() => getDailyTrend(filtered), [filtered]);
+  const monthlyTrend = useMemo(() => getMonthlyTrend(filtered), [filtered]);
+  const topTenants = useMemo(() => getTopTenants(filtered, topN), [filtered, topN]);
+  const topConnectors = useMemo(() => getTopConnectors(filtered, topN), [filtered, topN]);
+  const connByTenant = useMemo(() => getConnectorByTenant(filtered), [filtered]);
+  const heatmapData = useMemo(() => getHeatmapData(filtered), [filtered]);
+  const dayOfWeek = useMemo(() => getDayOfWeekAvg(filtered), [filtered]);
+  const spikes = useMemo(() => detectSpikes(filtered, spikeZ), [filtered, spikeZ]);
+  const segments = useMemo(() => segmentTenants(filtered), [filtered]);
+  const activeTenants = useMemo(() => getActiveTenants(filtered), [filtered]);
+  const connTrend = useMemo(() => getConnectorTrend(filtered), [filtered]);
+  const allTenants = useMemo(() => getUniqueTenants(baseData), [baseData]);
+  const allConnectors = useMemo(() => getUniqueConnectors(baseData), [baseData]);
+  const allConnectorNames = useMemo(() => [...new Set(filtered.map(r => r['Connector Name']))], [filtered]);
+  const pieData = useMemo(() => getTopConnectors(filtered, 8), [filtered]);
+
+  const handleFileUpload = useCallback(async (e) => {
+    const file = e.target.files[0];
     if (!file) return;
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      setError("Please upload an .xlsx or .xls file");
-      return;
-    }
     setLoading(true);
-    setError(null);
+    setError('');
     try {
-      const data = await parseExcel(file);
-      onData(data, file.name);
+      const { data } = await parseExcelFile(file);
+      setRawData(data);
+      setIsDemo(false);
+      setSelTenants([]);
+      setSelConnectors([]);
+      setDateRange({ start: '', end: '' });
+      setEmailSearch('');
     } catch (err) {
-      setError("Failed to parse file: " + err.message);
+      setError(`Failed to parse file: ${err.message}`);
     } finally {
       setLoading(false);
     }
-  }, [onData]);
-
-  const onDrop = useCallback((e) => {
-    e.preventDefault();
-    setDragging(false);
-    handle(e.dataTransfer.files[0]);
-  }, [handle]);
+  }, []);
 
   return (
-    <div style={{
-      background: C.bg, minHeight: "100vh", display: "flex",
-      flexDirection: "column", alignItems: "center", justifyContent: "center",
-      fontFamily: "'DM Sans', sans-serif", padding: 24,
-    }}>
-      {/* Logo */}
-      <div style={{ textAlign: "center", marginBottom: 40 }}>
-        <div style={{
-          width: 64, height: 64,
-          background: "linear-gradient(135deg,#0a2a5e,#0d3d80)",
-          borderRadius: 16, display: "flex", alignItems: "center",
-          justifyContent: "center", margin: "0 auto 20px",
-          boxShadow: "0 0 30px #00c8ff33",
-        }}>
-          <Activity size={28} color={C.cyan} />
-        </div>
-        <p style={{
-          fontSize: 11, letterSpacing: 4, color: C.muted,
-          textTransform: "uppercase", marginBottom: 8,
-          fontFamily: "'Space Mono', monospace",
-        }}>
-          ADP Integration Platform
-        </p>
-        <h1 style={{ fontSize: 32, fontWeight: 700, color: C.white, marginBottom: 8 }}>
-          API Call Monitor
-        </h1>
-        <p style={{ color: C.muted, fontSize: 14 }}>
-          Upload your daily Excel report to visualize API usage
-        </p>
-      </div>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#080d1a', fontFamily: "'Outfit', sans-serif", color: '#e2e8f0' }}>
+      <style>{`
+        @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+        * { box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #080d1a; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
+        input[type=range] { -webkit-appearance: none; height: 4px; border-radius: 2px; background: #1e293b; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; cursor: pointer; }
+      `}</style>
 
-      {/* Drop Zone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
-        style={{
-          width: "100%", maxWidth: 440,
-          border: `2px dashed ${dragging ? C.cyan : C.border}`,
-          borderRadius: 16,
-          background: dragging ? "#0a2040" : C.panel,
-          padding: "48px 32px", textAlign: "center",
-          cursor: "pointer", transition: "all 0.2s",
-          boxShadow: dragging ? `0 0 30px ${C.cyan}22` : "none",
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx,.xls"
-          style={{ display: "none" }}
-          onChange={(e) => handle(e.target.files[0])}
-        />
-        {loading ? (
+      <Sidebar
+        tenants={selTenants} connectors={selConnectors}
+        dateRange={dateRange} allTenants={allTenants} allConnectors={allConnectors}
+        onTenantChange={setSelTenants} onConnectorChange={setSelConnectors}
+        onDateChange={setDateRange} onEmailChange={setEmailSearch}
+        emailSearch={emailSearch} spikeZ={spikeZ} onSpikeZChange={setSpikeZ}
+        topN={topN} onTopNChange={setTopN}
+        onFileUpload={handleFileUpload} isDemo={isDemo}
+      />
+
+      {/* Main content */}
+      <div style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', minWidth: 0 }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
           <div>
-            <div className="spin" style={{
-              width: 40, height: 40,
-              border: `3px solid ${C.border}`,
-              borderTop: `3px solid ${C.cyan}`,
-              borderRadius: "50%", margin: "0 auto 16px",
-            }} />
-            <p style={{ color: C.text, fontSize: 14 }}>Parsing your Excel file...</p>
-          </div>
-        ) : (
-          <>
-            <Upload size={36} color={C.cyan} style={{ margin: "0 auto 16px" }} />
-            <p style={{ color: C.white, fontWeight: 600, fontSize: 16, marginBottom: 8 }}>
-              Drag & drop your Excel file
-            </p>
-            <p style={{ color: C.muted, fontSize: 13, marginBottom: 20 }}>or click to browse</p>
-            <button style={{
-              background: "linear-gradient(135deg,#0d7a5f,#00c896)",
-              color: "#fff", border: "none", borderRadius: 8,
-              padding: "10px 24px", fontSize: 13, fontWeight: 600,
-              cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8,
-            }}>
-              <Download size={14} /> Select .xlsx file
-            </button>
-          </>
-        )}
-      </div>
-
-      {error && (
-        <p style={{ color: C.magenta, fontSize: 13, marginTop: 16, maxWidth: 440, textAlign: "center" }}>
-          {error}
-        </p>
-      )}
-      <p style={{ color: C.muted, fontSize: 12, marginTop: 20 }}>
-        Supports the standard ADP API calls Excel format
-      </p>
-    </div>
-  );
-}
-
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-function Dashboard({ data, fileName, onReset }) {
-  const { rows, dateCols } = data;
-  const [search, setSearch] = useState("");
-  const [connFilter, setConnFilter] = useState("All");
-  const [sortCol, setSortCol] = useState("total");
-  const [sortDir, setSortDir] = useState("desc");
-  const [aiInsights, setAiInsights] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [showAI, setShowAI] = useState(false);
-
-  const tenantCol = Object.keys(rows[0] || {})[2] || "Tenant Name";
-  const connCol   = Object.keys(rows[0] || {})[0] || "Connector";
-  const tableDates = dateCols.slice(-3);
-
-  // Enrich rows
-  const enriched = useMemo(() => rows.map(r => {
-    const total = dateCols.reduce((s, d) => s + (Number(r[d]) || 0), 0);
-    const first = Number(r[dateCols[0]]) || 0;
-    const last  = Number(r[dateCols[dateCols.length - 1]]) || 0;
-    const trend = first ? (((last - first) / first) * 100).toFixed(1) : "0.0";
-    return {
-      ...r,
-      _total: total,
-      _trend: parseFloat(trend),
-      _spark: dateCols.slice(-5).map(d => Number(r[d]) || 0),
-      _connKey: connectorKey(r[connCol] || ""),
-    };
-  }), [rows, dateCols, connCol]);
-
-  // KPIs
-  const totalCalls   = useMemo(() => enriched.reduce((s, r) => s + r._total, 0), [enriched]);
-  const activeTenants = enriched.length;
-  const connectors   = useMemo(() => [...new Set(enriched.map(r => r._connKey))], [enriched]);
-  const lastTotal    = useMemo(() => enriched.reduce((s, r) => s + (Number(r[dateCols[dateCols.length - 1]]) || 0), 0), [enriched, dateCols]);
-  const prevTotal    = useMemo(() => dateCols.length > 1
-    ? enriched.reduce((s, r) => s + (Number(r[dateCols[dateCols.length - 2]]) || 0), 0)
-    : lastTotal, [enriched, dateCols, lastTotal]);
-  const dailyChange  = prevTotal ? (((lastTotal - prevTotal) / prevTotal) * 100).toFixed(1) : "0.0";
-  const dateRange    = dateCols.length ? `${dateCols[0]} — ${dateCols[dateCols.length - 1]}` : "";
-
-  // Charts data
-  const dailyVolume = useMemo(() => {
-    const cols = dateCols.length > 14 ? dateCols.slice(-14) : dateCols;
-    return cols.map(d => ({
-      date: d,
-      calls: enriched.reduce((s, r) => s + (Number(r[d]) || 0), 0),
-    }));
-  }, [enriched, dateCols]);
-
-  const connectorTotals = useMemo(() => {
-    const map = {};
-    enriched.forEach(r => { map[r._connKey] = (map[r._connKey] || 0) + r._total; });
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([name, calls]) => ({ name, calls }));
-  }, [enriched]);
-
-  // Filtered table
-  const filtered = useMemo(() => {
-    let list = enriched;
-    if (connFilter !== "All") list = list.filter(r => r._connKey === connFilter);
-    if (search) list = list.filter(r =>
-      (r[tenantCol] || "").toLowerCase().includes(search.toLowerCase())
-    );
-    const key = sortCol === "total" ? "_total" : "_trend";
-    return [...list].sort((a, b) =>
-      sortDir === "desc" ? b[key] - a[key] : a[key] - b[key]
-    );
-  }, [enriched, connFilter, search, sortCol, sortDir, tenantCol]);
-
-  const toggleSort = (col) => {
-    if (sortCol === col) setDir(d => d === "desc" ? "asc" : "desc");
-    else { setSortCol(col); setSortDir("desc"); }
-  };
-  const setDir = setSortDir;
-
-  // Export CSV
-  const exportCSV = () => {
-    const cols = [connCol, "OID", tenantCol, ...tableDates, "Total", "Trend%"];
-    const csvRows = [
-      cols.join(","),
-      ...filtered.map(r => [
-        `"${r[connCol] || ""}"`,
-        `"${r[Object.keys(rows[0])[1]] || ""}"`,
-        `"${r[tenantCol] || ""}"`,
-        ...tableDates.map(d => r[d] || 0),
-        r._total,
-        r._trend,
-      ].join(",")),
-    ];
-    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "adp_api_calls.csv";
-    a.click();
-  };
-
-  // AI Insights
-  const fetchAI = async () => {
-    setAiLoading(true);
-    setShowAI(true);
-    const top5 = filtered.slice(0, 5).map(r => ({
-      tenant: r[tenantCol], total: r._total, trend: r._trend,
-    }));
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 600,
-          messages: [{
-            role: "user",
-            content: `ADP API usage: totalCalls=${totalCalls}, tenants=${activeTenants}, connectors=${connectors.length}, dailyChange=${dailyChange}%, top5=${JSON.stringify(top5)}. Give exactly 3 insights as JSON array [{title,insight}]. Title max 4 words ALL CAPS. Insight 1-2 sentences. Respond ONLY with the JSON array.`,
-          }],
-        }),
-      });
-      const d = await res.json();
-      const text = d.content?.find(c => c.type === "text")?.text || "[]";
-      setAiInsights(JSON.parse(text.replace(/```json|```/g, "").trim()));
-    } catch {
-      setAiInsights([{ title: "UNAVAILABLE", insight: "Could not load AI insights at this time." }]);
-    }
-    setAiLoading(false);
-  };
-
-  const tooltipStyle = {
-    background: "#0d1e38", border: `1px solid ${C.border}`,
-    borderRadius: 6, fontSize: 12, color: C.text,
-  };
-
-  return (
-    <div style={{ background: C.bg, minHeight: "100vh", color: C.text }}>
-
-      {/* ── Header ── */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "14px 28px", borderBottom: `1px solid ${C.border}`,
-        background: C.panel, flexWrap: "wrap", gap: 12,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{
-            width: 36, height: 36,
-            background: "linear-gradient(135deg,#0a2a5e,#0d3d80)",
-            borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <Activity size={18} color={C.cyan} />
-          </div>
-          <div>
-            <p style={{
-              fontSize: 9, letterSpacing: 3, color: C.muted,
-              textTransform: "uppercase", fontFamily: "'Space Mono', monospace",
-            }}>
-              ADP Integration Platform
-            </p>
-            <h1 style={{ fontSize: 18, fontWeight: 700, color: C.white }}>API Call Monitor</h1>
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ textAlign: "right" }}>
-            <p style={{ fontSize: 10, color: C.muted }}>Report period</p>
-            <p style={{ fontSize: 12, fontWeight: 600, color: C.cyan, fontFamily: "'Space Mono', monospace" }}>
-              {dateRange}
-            </p>
-          </div>
-          <button className="btn-hover" onClick={exportCSV} style={{
-            background: "#0d3d20", border: `1px solid ${C.green}55`,
-            color: C.green, borderRadius: 8, padding: "8px 14px",
-            fontSize: 12, fontWeight: 600, cursor: "pointer",
-            display: "flex", alignItems: "center", gap: 6,
-          }}>
-            <Download size={13} /> Export CSV
-          </button>
-          <button className="btn-hover" onClick={fetchAI} style={{
-            background: "linear-gradient(135deg,#2a0a4a,#4a0a7a)",
-            border: "1px solid #9b6dff55", color: "#c084fc",
-            borderRadius: 8, padding: "8px 14px",
-            fontSize: 12, fontWeight: 600, cursor: "pointer",
-            display: "flex", alignItems: "center", gap: 6,
-          }}>
-            <Sparkles size={13} /> AI Insights
-          </button>
-          <button onClick={onReset} style={{
-            background: "transparent", border: `1px solid ${C.border}`,
-            color: C.muted, borderRadius: 8, padding: "8px 10px", cursor: "pointer",
-          }}>
-            <X size={14} />
-          </button>
-        </div>
-      </div>
-
-      <div style={{ padding: "20px 28px" }}>
-
-        {/* ── KPI Cards ── */}
-        <div className="fade-in" style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))",
-          gap: 16, marginBottom: 20,
-        }}>
-          {[
-            { label: "Total API Calls",  value: fmtK(totalCalls),    sub: `${dateCols.length}-period total`,                          icon: <Activity size={18} />,    color: C.cyan    },
-            { label: "Active Tenants",   value: activeTenants,        sub: "unique orgs",                                              icon: <Users size={18} />,       color: C.green   },
-            { label: "Connectors Used",  value: connectors.length,    sub: "connector types",                                          icon: <Plug size={18} />,        color: C.amber   },
-            { label: "Daily Avg Calls",  value: fmtK(Math.round(totalCalls / (dateCols.length || 1))), sub: `${Number(dailyChange) > 0 ? "+" : ""}${dailyChange}% last period`, icon: <TrendingUp size={18} />, color: "#fb923c" },
-          ].map((k, i) => (
-            <div key={i} style={{
-              background: C.panel, border: `1px solid ${C.border}`,
-              borderRadius: 12, padding: "16px 20px",
-              borderTop: `2px solid ${k.color}40`,
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                <p style={{ fontSize: 11, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>{k.label}</p>
-                <span style={{ color: k.color, opacity: 0.7 }}>{k.icon}</span>
-              </div>
-              <p style={{ fontSize: 28, fontWeight: 700, color: k.color, marginBottom: 4 }}>{k.value}</p>
-              <p style={{ fontSize: 11, color: C.muted }}>{k.sub}</p>
+            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 26, fontWeight: 800, margin: 0, letterSpacing: '-0.03em', color: '#f1f5f9' }}>
+              API Usage <span style={{ color: '#00e5ff' }}>Analytics</span>
+            </h1>
+            <div style={{ fontSize: 12, color: '#334155', marginTop: 4, fontFamily: 'JetBrains Mono' }}>
+              {absMin} → {absMax} · {filtered.length.toLocaleString()} data points
             </div>
-          ))}
+          </div>
+          {loading && <div style={{ fontSize: 12, color: '#00e5ff', animation: 'fadeUp 0.3s ease' }}>⟳ Loading…</div>}
+          {error && <div style={{ fontSize: 12, color: '#f87171', maxWidth: 300 }}>⚠ {error}</div>}
         </div>
 
-        {/* ── Charts Row ── */}
-        <div className="fade-in" style={{
-          display: "grid", gridTemplateColumns: "1.4fr 1fr",
-          gap: 16, marginBottom: 20,
-        }}>
-          {/* Daily volume */}
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-            <p style={{
-              fontSize: 10, letterSpacing: 3, color: C.muted,
-              textTransform: "uppercase", marginBottom: 16,
-              fontFamily: "'Space Mono', monospace",
-            }}>
-              Daily Call Volume
-            </p>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={dailyVolume} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#132040" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: C.muted, fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={fmtK} width={50} />
-                <Tooltip formatter={v => [fmtK(v), "Calls"]} contentStyle={tooltipStyle} />
-                <Bar dataKey="calls" fill={C.cyan} opacity={0.8} radius={[3, 3, 0, 0]} />
+        {/* KPI Cards */}
+        <KPICards metrics={metrics} />
+
+        {/* Trend Charts */}
+        <SectionHeader label="Usage Trends" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 0 }}>
+          <ChartCard title="Daily API Calls" subtitle="With 7-day rolling average">
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={dailyTrend}>
+                <defs>
+                  <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#00e5ff" stopOpacity={0.15} />
+                    <stop offset="100%" stopColor="#00e5ff" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Area type="monotone" dataKey="calls" name="Daily Calls" fill="url(#areaGrad)" stroke="#00e5ff" strokeWidth={1.5} dot={false} />
+                <Line type="monotone" dataKey="avg" name="7d Avg" stroke="#a78bfa" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Monthly API Usage" subtitle="Total calls per month">
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={monthlyTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} />
+                <XAxis dataKey="month" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="calls" name="Monthly Calls" fill="#a78bfa" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                <Line type="monotone" dataKey="calls" stroke="#00e5ff" strokeWidth={1.5} dot={{ fill: '#00e5ff', r: 3 }} name="Trend" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+
+        {/* Rankings */}
+        <SectionHeader label="Rankings" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <ChartCard title={`Top ${topN} Tenants`} subtitle="By total API calls">
+            <ResponsiveContainer width="100%" height={topN > 10 ? 360 : 280}>
+              <BarChart data={topTenants} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} width={100} tickLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="calls" name="API Calls" radius={[0, 4, 4, 0]} maxBarSize={16}>
+                  {topTenants.map((_, i) => <Cell key={i} fill={`${COLORS[0]}${i === 0 ? 'ff' : i < 3 ? 'bb' : '77'}`} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </ChartCard>
 
-          {/* Top connectors */}
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-            <p style={{
-              fontSize: 10, letterSpacing: 3, color: C.muted,
-              textTransform: "uppercase", marginBottom: 16,
-              fontFamily: "'Space Mono', monospace",
-            }}>
-              Top Connectors
-            </p>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart layout="vertical" data={connectorTotals} margin={{ top: 0, right: 10, bottom: 0, left: 0 }}>
-                <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={fmtK} />
-                <YAxis type="category" dataKey="name" width={130} tick={{ fill: C.text, fontSize: 11, fontFamily: "'Space Mono', monospace" }} tickLine={false} axisLine={false} />
-                <Tooltip formatter={v => [fmtK(v), "Calls"]} contentStyle={tooltipStyle} />
-                <Bar dataKey="calls" radius={[0, 3, 3, 0]}>
-                  {connectorTotals.map((_, i) => (
-                    <Cell key={i} fill={CONNECTOR_COLORS[i % CONNECTOR_COLORS.length]} />
+          <ChartCard title={`Top ${topN} Connectors`} subtitle="By total API calls">
+            <ResponsiveContainer width="100%" height={topN > 10 ? 360 : 280}>
+              <BarChart data={topConnectors} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} width={110} tickLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="calls" name="API Calls" radius={[0, 4, 4, 0]} maxBarSize={16}>
+                  {topConnectors.map((_, i) => <Cell key={i} fill={`${COLORS[1]}${i === 0 ? 'ff' : i < 3 ? 'bb' : '77'}`} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+
+        {/* Connector Analysis */}
+        <SectionHeader label="Connector Analysis" />
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+          <ChartCard title="Connector Mix per Tenant" subtitle="Stacked API calls by connector">
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={connByTenant}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} />
+                <XAxis dataKey="tenant" tick={{ fontSize: 9, fill: CHART_THEME.textColor }} angle={-25} textAnchor="end" height={50} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 10, color: '#475569' }} />
+                {allConnectorNames.slice(0, 8).map((conn, i) => (
+                  <Bar key={conn} dataKey={conn} stackId="a" fill={COLORS[i % COLORS.length]} maxBarSize={40} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="API Distribution" subtitle="Share by connector">
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie data={pieData} dataKey="calls" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2}>
+                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="transparent" />)}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 10, color: '#475569' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+
+        {/* Heatmap */}
+        <SectionHeader label="Usage Heatmap" />
+        <ChartCard title="API Calls Heatmap" subtitle="Tenant × Date — hover for details">
+          <Heatmap data={heatmapData} />
+        </ChartCard>
+
+        {/* Advanced Analytics */}
+        <SectionHeader label="Advanced Analytics" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <ChartCard title="Connector Performance" subtitle="Top 5 connectors over time">
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={connTrend.data}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 10, color: '#475569' }} />
+                {connTrend.connectors.map((conn, i) => (
+                  <Line key={conn} type="monotone" dataKey={conn} stroke={COLORS[i % COLORS.length]} strokeWidth={1.5} dot={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Peak Usage by Day" subtitle="Average API calls per weekday">
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={dayOfWeek}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.gridColor} />
+                <XAxis dataKey="day" tick={{ fontSize: 11, fill: CHART_THEME.textColor }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: CHART_THEME.textColor }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="calls" name="Avg Calls" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                  {dayOfWeek.map((entry, i) => (
+                    <Cell key={i} fill={['Sat', 'Sun'].includes(entry.day) ? '#334155' : '#34d399'} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </ChartCard>
         </div>
 
-        {/* ── AI Insights ── */}
-        {showAI && (
-          <div className="fade-in" style={{
-            background: C.panel, border: "1px solid #9b6dff44",
-            borderRadius: 12, padding: 20, marginBottom: 20,
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Sparkles size={14} color="#c084fc" />
-                <p style={{
-                  fontSize: 10, letterSpacing: 3, color: "#c084fc",
-                  textTransform: "uppercase", fontFamily: "'Space Mono', monospace",
-                }}>
-                  AI Insights
-                </p>
-              </div>
-              <button onClick={() => setShowAI(false)} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer" }}>
-                <X size={14} />
-              </button>
-            </div>
-            {aiLoading ? (
-              <p style={{ color: C.muted, fontSize: 13 }}>Analyzing your API data...</p>
+        {/* Spikes & Segmentation */}
+        <SectionHeader label="Anomaly Detection & Segmentation" />
+        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16 }}>
+          {/* Spikes */}
+          <ChartCard title="⚡ API Call Spikes" subtitle={`Anomalies above ${spikeZ}σ threshold`}>
+            {spikes.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#34d399', padding: '16px 0' }}>✅ No significant spikes detected</div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
-                {(aiInsights || []).map((ins, i) => (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {spikes.map((s, i) => (
                   <div key={i} style={{
-                    background: "#0d1628", border: `1px solid ${C.border}`,
-                    borderRadius: 8, padding: "12px 14px",
+                    background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)',
+                    borderRadius: 8, padding: '6px 12px', fontSize: 11,
                   }}>
-                    <p style={{
-                      fontSize: 9, letterSpacing: 2, marginBottom: 6,
-                      color: ["#c084fc", C.cyan, C.green][i] || C.cyan,
-                      fontFamily: "'Space Mono', monospace",
-                    }}>
-                      {ins.title}
-                    </p>
-                    <p style={{ fontSize: 12, color: C.text, lineHeight: 1.6 }}>{ins.insight}</p>
+                    <div style={{ color: '#f87171', fontWeight: 600 }}>{s.tenant}</div>
+                    <div style={{ color: '#64748b', fontSize: 10 }}>{s.connector} · {s.date}</div>
+                    <div style={{ color: '#fbbf24', fontFamily: 'JetBrains Mono', fontSize: 11, marginTop: 2 }}>
+                      {s.calls.toLocaleString()} calls (+{s.pct}%)
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-        )}
+          </ChartCard>
 
-        {/* ── Tenant Table ── */}
-        <div className="fade-in" style={{
-          background: C.panel, border: `1px solid ${C.border}`,
-          borderRadius: 12, overflow: "hidden",
-        }}>
-          {/* Table header controls */}
-          <div style={{
-            padding: "16px 20px", borderBottom: `1px solid ${C.border}`,
-            display: "flex", justifyContent: "space-between",
-            alignItems: "center", flexWrap: "wrap", gap: 12,
-          }}>
-            <div>
-              <p style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Top Tenants by API Usage</p>
-              <p style={{ fontSize: 11, color: C.muted }}>{filtered.length} tenants shown</p>
+          {/* Segmentation */}
+          <ChartCard title="Tenant Segmentation" subtitle="Low / Medium / High usage">
+            <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+              {segments.map((s, i) => {
+                const colors = { Low: '#34d399', Medium: '#fbbf24', High: '#f87171' };
+                const c = colors[s.segment];
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', padding: '7px 0',
+                    borderBottom: '1px solid #0f172a', gap: 10,
+                  }}>
+                    <div style={{ flex: 1, fontSize: 12, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: '#475569', fontFamily: 'JetBrains Mono' }}>{s.calls.toLocaleString()}</div>
+                    <div style={{
+                      fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+                      background: `${c}15`, border: `1px solid ${c}44`, color: c,
+                      textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0,
+                    }}>{s.segment}</div>
+                  </div>
+                );
+              })}
             </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              {/* Search */}
-              <div style={{
-                display: "flex", alignItems: "center", gap: 8,
-                background: "#0d1628", border: `1px solid ${C.border}`,
-                borderRadius: 8, padding: "6px 12px",
-              }}>
-                <Search size={13} color={C.muted} />
-                <input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Search tenant..."
-                  style={{
-                    background: "transparent", border: "none", outline: "none",
-                    color: C.white, fontSize: 12, width: 140,
-                  }}
-                />
-              </div>
-              {/* Connector filter */}
-              <select
-                value={connFilter}
-                onChange={e => setConnFilter(e.target.value)}
-                style={{
-                  background: "#0d1628", border: `1px solid ${C.border}`,
-                  borderRadius: 8, padding: "6px 12px",
-                  color: C.text, fontSize: 12, cursor: "pointer",
-                }}
-              >
-                <option value="All">All Connectors</option>
-                {connectors.sort().map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              {/* Quick filter pills */}
-              {connectors.slice(0, 3).map((c, i) => (
-                <button
-                  key={c}
-                  onClick={() => setConnFilter(f => f === c ? "All" : c)}
-                  style={{
-                    background: connFilter === c ? CONNECTOR_COLORS[i] + "33" : "transparent",
-                    border: `1px solid ${connFilter === c ? CONNECTOR_COLORS[i] : C.border}`,
-                    color: connFilter === c ? CONNECTOR_COLORS[i] : C.muted,
-                    borderRadius: 6, padding: "4px 10px",
-                    fontSize: 11, cursor: "pointer",
-                    fontFamily: "'Space Mono', monospace",
-                  }}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          </div>
+          </ChartCard>
+        </div>
 
-          {/* Table */}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        {/* Active Tenants Table */}
+        <SectionHeader label="Active Tenants" />
+        <ChartCard title="Tenant Summary" subtitle="All tenants with API activity">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {["#", "Tenant", "Connector", ...tableDates, "Spark"].map(h => (
-                    <th key={h} style={{
-                      padding: "10px 16px", color: C.muted, fontWeight: 500,
-                      textAlign: h === "#" || h === "Spark" ? "center" : "left",
-                      fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
-                      whiteSpace: "nowrap",
-                    }}>{h}</th>
+                <tr style={{ borderBottom: '1px solid #1e293b' }}>
+                  {['Tenant', 'Total Calls', 'Connectors', 'Active Days', 'Avg/Day', 'Last Seen'].map(h => (
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
-                  <th
-                    onClick={() => toggleSort("total")}
-                    style={{
-                      padding: "10px 16px", cursor: "pointer", userSelect: "none",
-                      color: sortCol === "total" ? C.cyan : C.muted,
-                      fontWeight: 500, textAlign: "right",
-                      fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
-                    }}
-                  >
-                    Total {sortCol === "total" && (sortDir === "desc"
-                      ? <ChevronDown size={11} style={{ display: "inline" }} />
-                      : <ChevronUp size={11} style={{ display: "inline" }} />)}
-                  </th>
-                  <th
-                    onClick={() => toggleSort("trend")}
-                    style={{
-                      padding: "10px 16px", cursor: "pointer", userSelect: "none",
-                      color: sortCol === "trend" ? C.cyan : C.muted,
-                      fontWeight: 500, textAlign: "right",
-                      fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
-                    }}
-                  >
-                    Trend {sortCol === "trend" && (sortDir === "desc"
-                      ? <ChevronDown size={11} style={{ display: "inline" }} />
-                      : <ChevronUp size={11} style={{ display: "inline" }} />)}
-                  </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.slice(0, 100).map((r, i) => {
-                  const tn = r[tenantCol] || "—";
-                  const cn = r._connKey;
-                  const colIdx = connectors.indexOf(cn) % CONNECTOR_COLORS.length;
-                  const trendUp = r._trend > 0;
-                  return (
-                    <tr key={i} className="row-hover" style={{ borderBottom: `1px solid ${C.border}22` }}>
-                      <td style={{ padding: "10px 16px", color: C.muted, fontFamily: "'Space Mono',monospace", fontSize: 11, textAlign: "center" }}>
-                        {String(i + 1).padStart(2, "0")}
-                      </td>
-                      <td style={{ padding: "10px 16px", color: C.white, fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {tn}
-                      </td>
-                      <td style={{ padding: "10px 16px" }}>
-                        <span style={{
-                          background: CONNECTOR_COLORS[colIdx] + "22",
-                          color: CONNECTOR_COLORS[colIdx],
-                          borderRadius: 4, padding: "2px 8px",
-                          fontSize: 10, fontFamily: "'Space Mono',monospace", whiteSpace: "nowrap",
-                        }}>
-                          {cn}
-                        </span>
-                      </td>
-                      {tableDates.map(d => (
-                        <td key={d} style={{ padding: "10px 12px", color: C.text, textAlign: "right", fontFamily: "'Space Mono',monospace", fontSize: 11 }}>
-                          {(Number(r[d]) || 0).toLocaleString()}
-                        </td>
-                      ))}
-                      <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                        <SparkBars values={r._spark} />
-                      </td>
-                      <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: C.cyan, fontFamily: "'Space Mono',monospace", fontSize: 12 }}>
-                        {fmtK(r._total)}
-                      </td>
-                      <td style={{ padding: "10px 16px", textAlign: "right", fontFamily: "'Space Mono',monospace", fontSize: 12 }}>
-                        <span style={{ color: trendUp ? C.green : r._trend < 0 ? C.magenta : C.muted }}>
-                          {trendUp ? "↑" : "↓"} {Math.abs(r._trend)}%
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {activeTenants.map((t, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #0f172a', transition: 'background 0.15s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#0d1526'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <td style={{ padding: '9px 12px', color: '#e2e8f0', fontWeight: 500 }}>{t.name}</td>
+                    <td style={{ padding: '9px 12px', color: '#00e5ff', fontFamily: 'JetBrains Mono' }}>{t.calls.toLocaleString()}</td>
+                    <td style={{ padding: '9px 12px', color: '#94a3b8' }}>{t.connectors}</td>
+                    <td style={{ padding: '9px 12px', color: '#94a3b8' }}>{t.days}</td>
+                    <td style={{ padding: '9px 12px', color: '#a78bfa', fontFamily: 'JetBrains Mono' }}>{t.avgPerDay.toLocaleString()}</td>
+                    <td style={{ padding: '9px 12px', color: '#475569', fontFamily: 'JetBrains Mono', fontSize: 11 }}>{t.lastSeen}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
-            {filtered.length > 100 && (
-              <p style={{ padding: "10px 20px", color: C.muted, fontSize: 11, fontFamily: "'Space Mono',monospace" }}>
-                Showing 100 of {filtered.length} rows
-              </p>
-            )}
           </div>
+        </ChartCard>
+
+        {/* Footer */}
+        <div style={{ textAlign: 'center', color: '#1e293b', fontSize: 10, fontFamily: 'JetBrains Mono', padding: '32px 0 8px', letterSpacing: '0.1em' }}>
+          API USAGE ANALYTICS · REACT EDITION
         </div>
       </div>
     </div>
-  );
-}
-
-// ── Root ──────────────────────────────────────────────────────────────────────
-export default function App() {
-  const [state, setState] = useState(null);
-
-  if (!state) {
-    return <UploadScreen onData={(data, name) => setState({ data, name })} />;
-  }
-  return (
-    <Dashboard
-      data={state.data}
-      fileName={state.name}
-      onReset={() => setState(null)}
-    />
   );
 }

@@ -159,16 +159,26 @@ export function getDailyTrend(records){
 
 export function getMonthlyTrend(records){
 
-  const map={};
+  if(!records || !records.length) return [];
 
-  records.forEach(r=>{
-    const m = r.date.substring(0,7);
-    map[m]=(map[m]||0)+r.calls;
+  const map = {};
+
+  records.forEach(r => {
+
+    if(!r || !r.date) return;
+
+    const month = r.date.substring(0,7);
+
+    map[month] = (map[month] || 0) + (r.calls || 0);
+
   });
 
   return Object.keys(map)
     .sort()
-    .map(m=>({month:m,calls:map[m]}));
+    .map(m => ({
+      month: m,
+      calls: map[m]
+    }));
 
 }
 

@@ -301,3 +301,33 @@ export function getHeatmapData(records){
   }));
 
 }
+export function getDayOfWeekAvg(records){
+
+  if(!records || !records.length) return [];
+
+  const days = {
+    0:{name:'Sun',total:0,count:0},
+    1:{name:'Mon',total:0,count:0},
+    2:{name:'Tue',total:0,count:0},
+    3:{name:'Wed',total:0,count:0},
+    4:{name:'Thu',total:0,count:0},
+    5:{name:'Fri',total:0,count:0},
+    6:{name:'Sat',total:0,count:0}
+  };
+
+  records.forEach(r=>{
+
+    const d = new Date(r.date + 'T00:00:00');
+    const day = d.getDay();
+
+    days[day].total += r.calls;
+    days[day].count += 1;
+
+  });
+
+  return Object.values(days).map(d=>({
+    day:d.name,
+    avg: d.count ? Math.round(d.total / d.count) : 0
+  }));
+
+}

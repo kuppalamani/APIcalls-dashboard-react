@@ -394,3 +394,28 @@ export function segmentTenants(records){
   });
 
 }
+export function getActiveTenants(records){
+
+  if(!records || !records.length) return [];
+
+  const map = {};
+
+  records.forEach(r=>{
+
+    const key = r.tenantName || r.oid || 'Unknown';
+
+    if(!map[key])
+      map[key] = {
+        name:key,
+        email:r.email || '',
+        calls:0
+      };
+
+    map[key].calls += r.calls;
+
+  });
+
+  return Object.values(map)
+    .sort((a,b)=>b.calls-a.calls);
+
+}

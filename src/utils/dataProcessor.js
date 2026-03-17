@@ -326,6 +326,34 @@ export function getUniqueTenants(records = []) {
 export function getUniqueConnectors(records = []) {
   return [...new Set(records.map((r) => r.connector || "Unknown"))].sort();
 }
+export function detectSpikes(records = [], z = 2.5) {
+
+  if (!records.length) return [];
+
+  const daily = {};
+
+  records.forEach(r => {
+    if (!r?.date) return;
+    daily[r.date] = (daily[r.date] || 0) + (r.calls || 0);
+  });
+
+  const values = Object.values(daily);
+  if (!values.length) return [];
+
+  const mean = values.reduce((s,v)=>s+v,0) / values.length;
+
+  const variance =
+    values.reduce((s,v)=>s + Math.pow(v-mean,2),0) / values.length;
+
+  const stdDev = Math.sqrt(variance);
+
+  return Object.entries(daily)
+    .filter(([date,calls]) => calls > mean + z * stdDev)
+    .map(([date,calls]) => ({
+      date,
+      calls
+    }));
+}
 
 export function parseExcelFile(file) {
   return processExcelFile(file);

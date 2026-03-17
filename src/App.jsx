@@ -1,5 +1,6 @@
 // src/App.jsx
 import React, { useState, useMemo, useCallback } from "react";
+import { getHourlyTrend } from './utils/dataProcessor';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -111,6 +112,11 @@ export default function App(){
     ()=>getDailyTrend(filtered),
     [filtered]
   );
+  
+  const hourlyTrend = useMemo(
+  () => getHourlyTrend(filtered),
+  [filtered]
+);
 
   const monthlyTrend = useMemo(
     ()=>getMonthlyTrend(filtered),

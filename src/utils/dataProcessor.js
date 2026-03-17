@@ -427,6 +427,30 @@ export function getUniqueConnectors(records=[]){
 }
 
 /* ---------------- ALIAS ---------------- */
+export function getHourlyTrend(records = []){
+
+  const hours = Array.from({length:24},(_,i)=>({
+    hour:i,
+    calls:0
+  }));
+
+  records.forEach(r=>{
+
+    if(!r?.date) return;
+
+    const d = new Date(r.date + "T00:00:00");
+    const h = d.getHours();
+
+    hours[h].calls += (r.calls || 0);
+
+  });
+
+  return hours.map(h=>({
+    hour: `${h.hour}:00`,
+    calls: h.calls
+  }));
+
+}
 
 export function parseExcelFile(file){
   return processExcelFile(file);

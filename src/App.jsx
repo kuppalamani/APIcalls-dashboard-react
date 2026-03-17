@@ -28,7 +28,8 @@ import {
   getConnectorTrend,
   getUniqueTenants,
   getUniqueConnectors,
-  getDateRange
+  getDateRange,
+  getHourlyTrend
 } from "./utils/dataProcessor";
 
 import { generateDemoData } from "./utils/demoData";

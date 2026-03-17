@@ -421,6 +421,36 @@ export function getUniqueConnectors(records){
 
 }
 
+export function getHourlyTrend(records){
+
+  if(!records || !records.length) return []
+
+  const hours = {}
+
+  for(let i=0;i<24;i++){
+    hours[i] = 0
+  }
+
+  records.forEach(r => {
+
+    if(!r || !r.date) return
+
+    const d = new Date(r.date + "T00:00:00")
+
+    if(isNaN(d)) return
+
+    const hour = d.getHours()
+
+    hours[hour] = (hours[hour] || 0) + (r.calls || 0)
+
+  })
+
+  return Object.keys(hours).map(h => ({
+    hour: `${h}:00`,
+    calls: hours[h]
+  }))
+
+}
 export function parseExcelFile(file){
   return processExcelFile(file)
 }

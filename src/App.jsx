@@ -1,21 +1,9 @@
 // src/App.jsx
 import React, { useState, useMemo, useCallback } from "react";
 import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ComposedChart,
-  Area,
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ComposedChart, Area
 } from "recharts";
 
 import Sidebar from "./components/Sidebar";
@@ -39,237 +27,268 @@ import {
   getConnectorTrend,
   getUniqueTenants,
   getUniqueConnectors,
-  getDateRange,
+  getDateRange
 } from "./utils/dataProcessor";
 
 import { generateDemoData } from "./utils/demoData";
 
+/* ------------------------------------------------ */
+/* CONSTANTS */
+/* ------------------------------------------------ */
+
 const COLORS = [
-  "#00e5ff",
-  "#a78bfa",
-  "#34d399",
-  "#fbbf24",
-  "#f87171",
-  "#38bdf8",
+  "#00e5ff","#a78bfa","#34d399","#fbbf24",
+  "#f87171","#38bdf8","#fb7185","#4ade80"
 ];
 
-const CHART_THEME = {
-  gridColor: "#1e293b",
-  textColor: "#475569",
-  tooltipBg: "#0d1526",
-  tooltipBorder: "#1e293b",
-};
+/* ------------------------------------------------ */
+/* APP */
+/* ------------------------------------------------ */
 
-const CustomTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
+export default function App(){
 
-  return (
-    <div
-      style={{
-        background: CHART_THEME.tooltipBg,
-        border: `1px solid ${CHART_THEME.tooltipBorder}`,
-        padding: 10,
-        borderRadius: 8,
-      }}
-    >
-      <div style={{ fontSize: 11, color: "#64748b" }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ fontSize: 12, color: p.color }}>
-          {p.name}: {Number(p.value || 0).toLocaleString()}
-        </div>
-      ))}
-    </div>
-  );
-};
+  const [records,setRecords] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState("");
 
-export default function App() {
-  const [rawData, setRawData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [selTenants,setSelTenants] = useState([]);
+  const [selConnectors,setSelConnectors] = useState([]);
+  const [dateRange,setDateRange] = useState({start:"",end:""});
+  const [emailSearch,setEmailSearch] = useState("");
+  const [topN,setTopN] = useState(10);
+  const [spikeZ,setSpikeZ] = useState(2.5);
 
-  const demoData = useMemo(() => generateDemoData(), []);
-  const baseData = rawData || demoData;
+  /* ------------------------------------------------ */
+  /* DATA SOURCE */
+  /* ------------------------------------------------ */
 
-  const { minDate: absMin, maxDate: absMax } = useMemo(
-    () => getDateRange(baseData || []),
+  const demo = useMemo(()=>generateDemoData(),[]);
+  const baseData = records || demo;
+
+  const {minDate,maxDate} = useMemo(
+    ()=>getDateRange(baseData || []),
     [baseData]
   );
 
-  const metrics = useMemo(() => computeKPIs(baseData || []), [baseData]);
-  const dailyTrend = useMemo(() => getDailyTrend(baseData || []), [baseData]);
+  /* ------------------------------------------------ */
+  /* FILTERING */
+  /* ------------------------------------------------ */
+
+  const filtered = useMemo(()=>{
+
+    let d = baseData || [];
+
+    if(selTenants.length)
+      d = d.filter(r => selTenants.includes(r.tenantName));
+
+    if(selConnectors.length)
+      d = d.filter(r => selConnectors.includes(r.connector));
+
+    if(dateRange.start)
+      d = d.filter(r => r.date >= dateRange.start);
+
+    if(dateRange.end)
+      d = d.filter(r => r.date <= dateRange.end);
+
+    if(emailSearch)
+      d = d.filter(r =>
+        (r.email || "")
+          .toLowerCase()
+          .includes(emailSearch.toLowerCase())
+      );
+
+    return d;
+
+  },[baseData,selTenants,selConnectors,dateRange,emailSearch]);
+
+  /* ------------------------------------------------ */
+  /* ANALYTICS */
+  /* ------------------------------------------------ */
+
+  const metrics = useMemo(()=>computeKPIs(filtered),[filtered]);
+
+  const dailyTrend = useMemo(
+    ()=>getDailyTrend(filtered),
+    [filtered]
+  );
+
   const monthlyTrend = useMemo(
-    () => getMonthlyTrend(baseData || []),
-    [baseData]
+    ()=>getMonthlyTrend(filtered),
+    [filtered]
   );
 
-  const topTenants = useMemo(() => getTopTenants(baseData || []), [baseData]);
+  const topTenants = useMemo(
+    ()=>getTopTenants(filtered).slice(0,topN),
+    [filtered,topN]
+  );
+
   const topConnectors = useMemo(
-    () => getTopConnectors(baseData || []),
-    [baseData]
+    ()=>getTopConnectors(filtered).slice(0,topN),
+    [filtered,topN]
   );
 
   const connByTenant = useMemo(
-    () => getConnectorByTenant(baseData || []),
-    [baseData]
+    ()=>getConnectorByTenant(filtered),
+    [filtered]
   );
 
-  const heatmapData = useMemo(() => getHeatmapData(baseData || []), [baseData]);
+  const heatmapData = useMemo(
+    ()=>getHeatmapData(filtered),
+    [filtered]
+  );
 
   const dayOfWeek = useMemo(
-    () => getDayOfWeekAvg(baseData || []),
-    [baseData]
+    ()=>getDayOfWeekAvg(filtered),
+    [filtered]
   );
 
-  const spikes = useMemo(() => detectSpikes(baseData || []), [baseData]);
+  const spikes = useMemo(
+    ()=>detectSpikes(filtered,spikeZ),
+    [filtered,spikeZ]
+  );
 
-  const segments = useMemo(() => segmentTenants(baseData || []), [baseData]);
+  const segments = useMemo(
+    ()=>segmentTenants(filtered),
+    [filtered]
+  );
 
   const activeTenants = useMemo(
-    () => getActiveTenants(baseData || []),
+    ()=>getActiveTenants(filtered),
+    [filtered]
+  );
+
+  const connectorTrend = useMemo(
+    ()=>getConnectorTrend(filtered),
+    [filtered]
+  );
+
+  const allTenants = useMemo(
+    ()=>getUniqueTenants(baseData),
     [baseData]
   );
 
-  const connTrend = useMemo(
-    () => getConnectorTrend(baseData || []),
+  const allConnectors = useMemo(
+    ()=>getUniqueConnectors(baseData),
     [baseData]
   );
 
-  const pieData = useMemo(
-    () => getTopConnectors(baseData || []).slice(0, 8),
-    [baseData]
-  );
+  /* ------------------------------------------------ */
+  /* FILE UPLOAD */
+  /* ------------------------------------------------ */
 
-  const handleFileUpload = useCallback(async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleFileUpload = useCallback(async(e)=>{
+
+    const file = e.target.files[0];
+    if(!file) return;
 
     setLoading(true);
     setError("");
 
-    try {
+    try{
+
       const result = await parseExcelFile(file);
-      setRawData(result.data || result.records || []);
-    } catch (err) {
-      setError(err.message);
+
+      setRecords(result.records || []);
+
+    }catch(err){
+
+      setError("Failed to parse Excel file");
+
+    }finally{
+
+      setLoading(false);
+
     }
 
-    setLoading(false);
-  }, []);
+  },[]);
 
-  return (
-    <div style={{ background: "#080d1a", minHeight: "100vh", color: "#e2e8f0" }}>
-      <Sidebar onFileUpload={handleFileUpload} />
+  /* ------------------------------------------------ */
+  /* UI */
+  /* ------------------------------------------------ */
 
-      <div style={{ padding: 24 }}>
+  return(
+    <div style={{display:"flex",minHeight:"100vh"}}>
 
-        <h1 style={{ fontSize: 24 }}>
-          API Usage Analytics
-        </h1>
+      <Sidebar
+        tenants={selTenants}
+        connectors={selConnectors}
+        dateRange={dateRange}
+        allTenants={allTenants}
+        allConnectors={allConnectors}
+        onTenantChange={setSelTenants}
+        onConnectorChange={setSelConnectors}
+        onDateChange={setDateRange}
+        onEmailChange={setEmailSearch}
+        emailSearch={emailSearch}
+        spikeZ={spikeZ}
+        onSpikeZChange={setSpikeZ}
+        topN={topN}
+        onTopNChange={setTopN}
+        onFileUpload={handleFileUpload}
+        isDemo={!records}
+      />
 
-        <div style={{ fontSize: 12, marginBottom: 20 }}>
-          {absMin} → {absMax} · {(baseData?.length || 0).toLocaleString()} rows
-        </div>
+      <div style={{flex:1,padding:24}}>
 
-        {loading && <div>Loading...</div>}
-        {error && <div style={{ color: "red" }}>{error}</div>}
+        <h2>API Usage Analytics</h2>
 
-        <KPICards metrics={metrics} />
+        {loading && <p>Loading...</p>}
+        {error && <p style={{color:"red"}}>{error}</p>}
 
-        <SectionHeader label="Daily Trend" />
+        <KPICards metrics={metrics}/>
 
-        <ChartCard>
+        <SectionHeader label="Usage Trends"/>
+
+        <ChartCard title="Daily Calls">
           <ResponsiveContainer width="100%" height={260}>
-            <ComposedChart data={dailyTrend || []}>
-              <CartesianGrid stroke={CHART_THEME.gridColor} />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip content={<CustomTooltip />} />
-
-              <Area
+            <LineChart data={dailyTrend || []}>
+              <CartesianGrid strokeDasharray="3 3"/>
+              <XAxis dataKey="date"/>
+              <YAxis/>
+              <Tooltip/>
+              <Line
+                type="monotone"
                 dataKey="calls"
-                fill="#00e5ff33"
                 stroke="#00e5ff"
               />
-
-              <Line
-                dataKey="avg"
-                stroke="#a78bfa"
-                strokeWidth={2}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <SectionHeader label="Monthly Trend" />
-
-        <ChartCard>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={monthlyTrend || []}>
-              <CartesianGrid stroke={CHART_THEME.gridColor} />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip content={<CustomTooltip />} />
-
-              <Bar dataKey="calls" fill="#a78bfa" />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <SectionHeader label="Top Connectors" />
-
-        <ChartCard>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={pieData || []}
-                dataKey="calls"
-                nameKey="name"
-                innerRadius={60}
-                outerRadius={100}
-              >
-                {(pieData || []).map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                ))}
-              </Pie>
-
-              <Tooltip content={<CustomTooltip />} />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <SectionHeader label="Connector Trend" />
-
-        <ChartCard>
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart>
-              <CartesianGrid stroke={CHART_THEME.gridColor} />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend />
-
-              {(connTrend || []).slice(0,5).map((c,i)=>(
-                <Line
-                  key={c.connector}
-                  data={c.trend}
-                  dataKey="calls"
-                  name={c.connector}
-                  stroke={COLORS[i % COLORS.length]}
-                  dot={false}
-                />
-              ))}
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <SectionHeader label="Heatmap" />
+        <ChartCard title="Monthly Calls">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={monthlyTrend || []}>
+              <CartesianGrid strokeDasharray="3 3"/>
+              <XAxis dataKey="month"/>
+              <YAxis/>
+              <Tooltip/>
+              <Bar dataKey="calls" fill="#a78bfa"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <SectionHeader label="Top Tenants"/>
 
         <ChartCard>
-          <Heatmap data={heatmapData || []} />
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={topTenants || []}>
+              <XAxis dataKey="name"/>
+              <YAxis/>
+              <Tooltip/>
+              <Bar dataKey="calls" fill="#34d399"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <SectionHeader label="Heatmap"/>
+
+        <ChartCard>
+          <Heatmap data={heatmapData}/>
         </ChartCard>
 
       </div>
+
     </div>
   );
+
 }

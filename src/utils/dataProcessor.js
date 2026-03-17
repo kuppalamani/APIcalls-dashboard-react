@@ -294,7 +294,35 @@ export function getUniqueConnectors(records = []) {
   return [...new Set(safe.map((r) => r.connector))];
 
 }
+/* ---------- Heatmap ---------- */
 
+export function getHeatmapData(records = []) {
+
+  const safe = safeRecords(records)
+
+  const tenants = [...new Set(safe.map(r => r.tenantName || r.oid))]
+  const dates = [...new Set(safe.map(r => r.date))].sort()
+
+  const matrix = {}
+
+  safe.forEach(r => {
+
+    if(!r || !r.date) return
+
+    const tenant = r.tenantName || r.oid
+    const key = `${tenant}||${r.date}`
+
+    matrix[key] = (matrix[key] || 0) + Number(r.calls || 0)
+
+  })
+
+  return {
+    tenants,
+    dates,
+    matrix
+  }
+
+}
 /* ---------- Hourly Trend ---------- */
 
 export function getHourlyTrend(records = []) {

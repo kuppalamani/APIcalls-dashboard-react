@@ -349,22 +349,30 @@ export function getUniqueConnectors(records){
 
 /* ---------------- HOURLY TREND ---------------- */
 
-export function getHourlyTrend(records){
+/* ---------- Hourly Trend ---------- */
 
-  const hours = Array.from({length:24},(_,i)=>({
-    hour:`${i}:00`,
-    calls:0
-  }));
+export function getHourlyTrend(records = []) {
 
-  records.forEach(r=>{
+  const safe = safeRecords(records)
 
-    const d = new Date(r.date+"T00:00:00");
-    const h = d.getHours();
+  const hours = Array.from({ length: 24 }, (_, i) => ({
+    hour: `${i}:00`,
+    calls: 0
+  }))
 
-    hours[h].calls += r.calls;
+  safe.forEach(r => {
 
-  });
+    if (!r || !r.date) return
 
-  return hours;
+    const d = new Date(r.date + "T00:00:00")
+    if (isNaN(d)) return
+
+    const h = d.getHours()
+
+    hours[h].calls += Number(r.calls || 0)
+
+  })
+
+  return hours
 
 }

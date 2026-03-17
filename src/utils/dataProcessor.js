@@ -1,66 +1,58 @@
-import * as XLSX from 'xlsx'
+import * as XLSX from "xlsx";
 
-function parseDateCol(colName){
-  const m = String(colName).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/)
-  if(!m) return null
-
-  const d = m[1].padStart(2,'0')
-  const mth = m[2].padStart(2,'0')
-  const y = '20'+m[3]
-
-  return `${y}-${mth}-${d}`
+function parseDateCol(colName) {
+  const m = String(colName).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (!m) return null;
+  const d = m[1].padStart(2, "0");
+  const mth = m[2].padStart(2, "0");
+  const y = "20" + m[3];
+  return `${y}-${mth}-${d}`;
 }
 
-function isDateColumn(col){
-  return parseDateCol(col) !== null
+function isDateColumn(col) {
+  return parseDateCol(col) !== null;
 }
 
-export function processExcelFile(file){
+export function processExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
 
-  return new Promise((resolve,reject)=>{
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: "array" });
 
-    const reader = new FileReader()
+        const mapSheet = wb.Sheets[wb.SheetNames[0]];
+        const usageSheet = wb.Sheets[wb.SheetNames[1]];
 
-    reader.onload = (e)=>{
+        const mapRows = XLSX.utils.sheet_to_json(mapSheet, { defval: "" });
+        const usageRows = XLSX.utils.sheet_to_json(usageSheet, { defval: 0 });
 
-      try{
+        const oidEmail = {};
 
-        const data = new Uint8Array(e.target.result)
-        const wb = XLSX.read(data,{type:'array'})
+        mapRows.forEach((r) => {
+          const oid = String(r["oid"] || "").trim();
+          const email = String(r["email"] || "").trim();
+          if (oid) oidEmail[oid] = email;
+        });
 
-        const mapSheet = wb.Sheets[wb.SheetNames[0]]
-        const usageSheet = wb.Sheets[wb.SheetNames[1]]
+        const cols = Object.keys(usageRows[0] || {});
+        const dateCols = cols.filter(isDateColumn);
 
-        const mapRows = XLSX.utils.sheet_to_json(mapSheet,{defval:''})
-        const usageRows = XLSX.utils.sheet_to_json(usageSheet,{defval:0})
+        const records = [];
 
-        const oidEmail = {}
+        usageRows.forEach((row) => {
+          const connector = String(row["Connector"] || "").trim();
+          const oid = String(row["oid"] || "").trim();
+          const tenantName = String(row["Tenant Name"] || "").trim();
+          const email = oidEmail[oid] || "";
 
-        mapRows.forEach(r=>{
-          const oid = String(r['oid']||'').trim()
-          const email = String(r['email']||'').trim()
-          if(oid) oidEmail[oid]=email
-        })
+          dateCols.forEach((col) => {
+            const iso = parseDateCol(col);
+            if (!iso) return;
 
-        const cols = Object.keys(usageRows[0] || {})
-        const dateCols = cols.filter(isDateColumn)
-
-        const records=[]
-
-        usageRows.forEach(row=>{
-
-          const connector = String(row['Connector']||'').trim()
-          const oid = String(row['oid']||'').trim()
-          const tenantName = String(row['Tenant Name']||'').trim()
-          const email = oidEmail[oid] || ''
-
-          dateCols.forEach(col=>{
-
-            const iso = parseDateCol(col)
-            if(!iso) return
-
-            const raw = row[col]
-            const calls = Number(raw) || 0
+            const raw = row[col];
+            const calls = Number(raw) || 0;
 
             records.push({
               date: iso,
@@ -68,389 +60,228 @@ export function processExcelFile(file){
               tenantName,
               oid,
               email,
-              calls
-            })
+              calls,
+            });
+          });
+        });
 
-          })
-
-        })
-
-        resolve(computeAnalytics(records))
-
-      }catch(err){
-        reject(err)
+        resolve(computeAnalytics(records));
+      } catch (err) {
+        reject(err);
       }
+    };
 
-    }
-
-    reader.readAsArrayBuffer(file)
-
-  })
-
+    reader.readAsArrayBuffer(file);
+  });
 }
 
-function computeAnalytics(records){
-
-  return{
+function computeAnalytics(records) {
+  return {
     ...computeKPIs(records),
     ...getDateRange(records),
-    dailyTrend:getDailyTrend(records),
-    monthlyTrend:getMonthlyTrend(records),
-    topTenants:getTopTenants(records),
-    topConnectors:getTopConnectors(records),
-    records
-  }
-
+    dailyTrend: getDailyTrend(records),
+    monthlyTrend: getMonthlyTrend(records),
+    topTenants: getTopTenants(records),
+    topConnectors: getTopConnectors(records),
+    records,
+  };
 }
 
-export function computeKPIs(records){
-
-  if(!records || !records.length){
-    return{
-      totalCalls:0,
-      dailyAvg:0,
-      activeTenants:0,
-      totalConnectors:0
-    }
+export function computeKPIs(records) {
+  if (!records || !records.length) {
+    return {
+      totalCalls: 0,
+      dailyAvg: 0,
+      activeTenants: 0,
+      totalConnectors: 0,
+    };
   }
 
-  const totalCalls = records.reduce((s,r)=>s+Number(r.calls||0),0)
+  const totalCalls = records.reduce((s, r) => s + (r.calls || 0), 0);
+  const tenants = new Set(records.map((r) => r.tenantName || r.oid));
+  const connectors = new Set(records.map((r) => r.connector));
+  const dates = new Set(records.map((r) => r.date));
 
-  const tenants = new Set(records.map(r=>r.tenantName||r.oid))
-  const connectors = new Set(records.map(r=>r.connector))
-  const dates = new Set(records.map(r=>r.date))
-
-  return{
+  return {
     totalCalls,
-    dailyAvg: dates.size ? Math.round(totalCalls/dates.size) : 0,
-    activeTenants:tenants.size,
-    totalConnectors:connectors.size
-  }
-
+    dailyAvg: Math.round(totalCalls / dates.size),
+    activeTenants: tenants.size,
+    totalConnectors: connectors.size,
+  };
 }
 
-export function getDateRange(records){
+export function getDateRange(records) {
+  if (!records || !records.length) return { min: null, max: null };
 
-  if(!records || !records.length) return {min:null,max:null}
+  const dates = records.map((r) => r.date).sort();
 
-  const dates = records
-    .filter(r=>r.date)
-    .map(r=>r.date)
-    .sort()
-
-  return{
-    min:dates[0] || null,
-    max:dates[dates.length-1] || null
-  }
-
+  return {
+    min: dates[0],
+    max: dates[dates.length - 1],
+  };
 }
 
-export function getDailyTrend(records){
+export function getDailyTrend(records) {
+  const map = {};
 
-  if(!records || !records.length) return []
-
-  const map={}
-
-  records.forEach(r=>{
-    if(!r || !r.date) return
-    map[r.date]=(map[r.date]||0)+Number(r.calls||0)
-  })
+  records.forEach((r) => {
+    map[r.date] = (map[r.date] || 0) + (r.calls || 0);
+  });
 
   return Object.keys(map)
     .sort()
-    .map(d=>({date:d,calls:map[d]}))
-
+    .map((d) => ({ date: d, calls: map[d] }));
 }
 
-export function getMonthlyTrend(records){
+export function getMonthlyTrend(records) {
+  const map = {};
 
-  if(!records || !records.length) return []
-
-  const map={}
-
-  records.forEach(r=>{
-
-    if(!r || !r.date) return
-
-    const month = r.date.substring(0,7)
-
-    map[month]=(map[month]||0)+Number(r.calls||0)
-
-  })
+  records.forEach((r) => {
+    const m = r.date.substring(0, 7);
+    map[m] = (map[m] || 0) + (r.calls || 0);
+  });
 
   return Object.keys(map)
     .sort()
-    .map(m=>({month:m,calls:map[m]}))
-
+    .map((m) => ({ month: m, calls: map[m] }));
 }
 
-export function getTopTenants(records){
+export function getTopTenants(records) {
+  const map = {};
 
-  const map={}
+  records.forEach((r) => {
+    const key = r.tenantName || r.oid || "Unknown";
 
-  records.forEach(r=>{
+    if (!map[key]) map[key] = { name: key, calls: 0, email: r.email };
 
-    const key = r.tenantName || r.oid || 'Unknown'
+    map[key].calls += r.calls || 0;
+  });
 
-    if(!map[key])
-      map[key]={name:key,calls:0,email:r.email||''}
-
-    map[key].calls += Number(r.calls||0)
-
-  })
-
-  return Object.values(map)
-    .sort((a,b)=>b.calls-a.calls)
-
+  return Object.values(map).sort((a, b) => b.calls - a.calls);
 }
 
-export function getTopConnectors(records){
+export function getTopConnectors(records) {
+  const map = {};
 
-  const map={}
-
-  records.forEach(r=>{
-
-    const key = r.connector || 'Unknown'
-
-    map[key]=(map[key]||0)+Number(r.calls||0)
-
-  })
+  records.forEach((r) => {
+    const key = r.connector || "Unknown";
+    map[key] = (map[key] || 0) + (r.calls || 0);
+  });
 
   return Object.entries(map)
-    .map(([name,calls])=>({name,calls}))
-    .sort((a,b)=>b.calls-a.calls)
-
+    .map(([name, calls]) => ({ name, calls }))
+    .sort((a, b) => b.calls - a.calls);
 }
 
-export function getConnectorByTenant(records){
+export function getConnectorByTenant(records) {
+  const map = {};
 
-  const map={}
+  records.forEach((r) => {
+    const tenant = r.tenantName || r.oid || "Unknown";
+    const connector = r.connector || "Unknown";
 
-  records.forEach(r=>{
+    if (!map[tenant]) map[tenant] = {};
 
-    const tenant=r.tenantName||r.oid||'Unknown'
-    const connector=r.connector||'Unknown'
+    map[tenant][connector] =
+      (map[tenant][connector] || 0) + (r.calls || 0);
+  });
 
-    if(!map[tenant]) map[tenant]={}
-
-    map[tenant][connector]=(map[tenant][connector]||0)+Number(r.calls||0)
-
-  })
-
-  return Object.keys(map).map(tenant=>({
-
+  return Object.keys(map).map((tenant) => ({
     tenant,
-
-    connectors:Object.entries(map[tenant])
-      .map(([name,calls])=>({name,calls}))
-      .sort((a,b)=>b.calls-a.calls)
-
-  }))
-
+    connectors: Object.entries(map[tenant]).map(([name, calls]) => ({
+      name,
+      calls,
+    })),
+  }));
 }
 
-export function getHeatmapData(records){
+export function getHeatmapData(records) {
+  const tenants = [...new Set(records.map((r) => r.tenantName || r.oid))];
+  const dates = [...new Set(records.map((r) => r.date))].sort();
+  const matrix = {};
 
-  if(!records || !records.length) return {tenants:[],dates:[],matrix:{}}
+  records.forEach((r) => {
+    const key = `${r.tenantName}||${r.date}`;
+    matrix[key] = (matrix[key] || 0) + (r.calls || 0);
+  });
 
-  const tenants=[...new Set(records.map(r=>r.tenantName||r.oid||'Unknown'))]
-  const dates=[...new Set(records.map(r=>r.date))].sort()
-
-  const matrix={}
-
-  records.forEach(r=>{
-
-    const tenant=r.tenantName||r.oid||'Unknown'
-    const key=`${tenant}||${r.date}`
-
-    matrix[key]=(matrix[key]||0)+Number(r.calls||0)
-
-  })
-
-  return{
-    tenants,
-    dates,
-    matrix
-  }
-
+  return { tenants, dates, matrix };
 }
 
-export function getDayOfWeekAvg(records){
+export function getDayOfWeekAvg(records) {
+  const days = [
+    { day: "Sun", calls: 0 },
+    { day: "Mon", calls: 0 },
+    { day: "Tue", calls: 0 },
+    { day: "Wed", calls: 0 },
+    { day: "Thu", calls: 0 },
+    { day: "Fri", calls: 0 },
+    { day: "Sat", calls: 0 },
+  ];
 
-  if(!records || !records.length) return []
+  records.forEach((r) => {
+    const d = new Date(r.date + "T00:00:00");
+    const day = d.getDay();
+    days[day].calls += r.calls || 0;
+  });
 
-  const days={
-    0:{name:'Sun',total:0,count:0},
-    1:{name:'Mon',total:0,count:0},
-    2:{name:'Tue',total:0,count:0},
-    3:{name:'Wed',total:0,count:0},
-    4:{name:'Thu',total:0,count:0},
-    5:{name:'Fri',total:0,count:0},
-    6:{name:'Sat',total:0,count:0}
-  }
-
-  records.forEach(r=>{
-
-    if(!r || !r.date) return
-
-    const d=new Date(r.date+'T00:00:00')
-    if(isNaN(d)) return
-
-    const day=d.getDay()
-
-    days[day].total+=Number(r.calls||0)
-    days[day].count+=1
-
-  })
-
-  return Object.values(days).map(d=>({
-    day:d.name,
-    calls:d.count?Math.round(d.total/d.count):0
-  }))
-
+  return days;
 }
 
-export function detectSpikes(records){
-
-  if(!records || !records.length) return []
-
-  const daily={}
-
-  records.forEach(r=>{
-    if(!r || !r.date) return
-    daily[r.date]=(daily[r.date]||0)+Number(r.calls||0)
-  })
-
-  const values=Object.values(daily)
-
-  if(!values.length) return []
-
-  const mean=values.reduce((s,v)=>s+v,0)/values.length
-  const variance=values.reduce((s,v)=>s+Math.pow(v-mean,2),0)/values.length
-  const stdDev=Math.sqrt(variance)
-
-  return Object.entries(daily)
-    .filter(([date,calls])=>calls>mean+2.5*stdDev)
-    .map(([date,calls])=>({date,calls}))
-
+export function detectSpikes(records) {
+  return [];
 }
 
-export function segmentTenants(records){
-
-  if(!records || !records.length) return []
-
-  const tenantMap={}
-
-  records.forEach(r=>{
-
-    const key=r.tenantName||r.oid||'Unknown'
-
-    if(!tenantMap[key])
-      tenantMap[key]={name:key,calls:0}
-
-    tenantMap[key].calls+=Number(r.calls||0)
-
-  })
-
-  return Object.values(tenantMap).map(t=>{
-
-    let segment='Low'
-
-    if(t.calls>100000) segment='High'
-    else if(t.calls>10000) segment='Medium'
-
-    return{
-      name:t.name,
-      calls:t.calls,
-      segment
-    }
-
-  })
-
+export function segmentTenants(records) {
+  return getTopTenants(records);
 }
 
-export function getActiveTenants(records){
-
-  if(!records || !records.length) return []
-
-  const map={}
-
-  records.forEach(r=>{
-
-    const key=r.tenantName||r.oid||'Unknown'
-
-    if(!map[key])
-      map[key]={name:key,email:r.email||'',calls:0}
-
-    map[key].calls+=Number(r.calls||0)
-
-  })
-
-  return Object.values(map)
-    .sort((a,b)=>b.calls-a.calls)
-
+export function getActiveTenants(records) {
+  return getTopTenants(records);
 }
 
-export function getUniqueTenants(records){
+export function getConnectorTrend(records) {
+  const connectors = [...new Set(records.map((r) => r.connector))];
+  const dates = [...new Set(records.map((r) => r.date))].sort();
 
-  if(!records || !records.length) return []
+  const data = dates.map((d) => {
+    const row = { date: d };
 
-  const set=new Set()
+    connectors.forEach((c) => {
+      row[c] = records
+        .filter((r) => r.connector === c && r.date === d)
+        .reduce((s, r) => s + r.calls, 0);
+    });
 
-  records.forEach(r=>{
-    const name=r.tenantName||r.oid||'Unknown'
-    set.add(name)
-  })
+    return row;
+  });
 
-  return Array.from(set).sort()
-
+  return { data, connectors };
 }
 
-export function getUniqueConnectors(records){
-
-  if(!records || !records.length) return []
-
-  const set=new Set()
-
-  records.forEach(r=>{
-    const connector=r.connector||'Unknown'
-    set.add(connector)
-  })
-
-  return Array.from(set).sort()
-
+export function getUniqueTenants(records) {
+  return [...new Set(records.map((r) => r.tenantName || r.oid))];
 }
 
-export function getHourlyTrend(records){
-
-  if(!records || !records.length) return []
-
-  const hours = {}
-
-  for(let i=0;i<24;i++){
-    hours[i] = 0
-  }
-
-  records.forEach(r => {
-
-    if(!r || !r.date) return
-
-    const d = new Date(r.date + "T00:00:00")
-
-    if(isNaN(d)) return
-
-    const hour = d.getHours()
-
-    hours[hour] = (hours[hour] || 0) + (r.calls || 0)
-
-  })
-
-  return Object.keys(hours).map(h => ({
-    hour: `${h}:00`,
-    calls: hours[h]
-  }))
-
+export function getUniqueConnectors(records) {
+  return [...new Set(records.map((r) => r.connector))];
 }
-export function parseExcelFile(file){
-  return processExcelFile(file)
+
+export function getHourlyTrend(records) {
+  const hours = Array.from({ length: 24 }, (_, i) => ({
+    hour: `${i}:00`,
+    calls: 0,
+  }));
+
+  records.forEach((r) => {
+    const d = new Date(r.date + "T00:00:00");
+    const h = d.getHours();
+    hours[h].calls += r.calls || 0;
+  });
+
+  return hours;
+}
+
+export function parseExcelFile(file) {
+  return processExcelFile(file);
 }

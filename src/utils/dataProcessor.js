@@ -25,13 +25,11 @@ function safeRecords(records) {
 /* ---------- Excel Parser ---------- */
 
 export function parseExcelFile(file) {
-
   return new Promise((resolve, reject) => {
 
     const reader = new FileReader();
 
     reader.onload = (e) => {
-
       try {
 
         const data = new Uint8Array(e.target.result);
@@ -45,12 +43,10 @@ export function parseExcelFile(file) {
 
         const oidEmail = {};
 
-        mapRows.forEach((r) => {
+        mapRows.forEach(r => {
           if (!r) return;
-
           const oid = String(r["oid"] || "").trim();
           const email = String(r["email"] || "").trim();
-
           if (oid) oidEmail[oid] = email;
         });
 
@@ -59,21 +55,22 @@ export function parseExcelFile(file) {
 
         const records = [];
 
-        usageRows.forEach((row) => {
+        usageRows.forEach(row => {
 
           if (!row) return;
 
-          const connector = String(row["Connector"] || "").trim();
+          const connector = String(row["Connector"] || "Unknown").trim();
           const oid = String(row["oid"] || "").trim();
           const tenantName = String(row["Tenant Name"] || "").trim();
           const email = oidEmail[oid] || "";
 
-          dateCols.forEach((col) => {
+          dateCols.forEach(col => {
 
             const iso = parseDateCol(col);
             if (!iso) return;
 
             const calls = Number(row[col]) || 0;
+
             if (calls === 0) return;
 
             records.push({
@@ -92,17 +89,12 @@ export function parseExcelFile(file) {
         resolve({ data: records });
 
       } catch (err) {
-
         reject(err);
-
       }
-
     };
 
     reader.readAsArrayBuffer(file);
-
   });
-
 }
 
 /* ---------- KPIs ---------- */
@@ -122,34 +114,24 @@ export function computeKPIs(records = []) {
 
   const totalCalls = safe.reduce((s, r) => s + Number(r.calls || 0), 0);
 
-  const tenants = new Set(safe.map((r) => r.tenantName || r.oid));
-  const connectors = new Set(safe.map((r) => r.connector));
-  const dates = new Set(safe.map((r) => r.date));
+  const tenants = new Set();
+  const connectors = new Set();
+  const dates = new Set();
+
+  safe.forEach(r => {
+    tenants.add(r.tenantName || r.oid);
+    connectors.add(r.connector || "Unknown");
+    dates.add(r.date);
+  });
+
+  const days = dates.size || 1;
 
   return {
     totalCalls,
-    dailyAvg: dates.size ? Math.round(totalCalls / dates.size) : 0,
+    dailyAvg: Math.round(totalCalls / days),
     activeTenants: tenants.size,
     totalConnectors: connectors.size
   };
-
-}
-
-/* ---------- Date Range ---------- */
-
-export function getDateRange(records = []) {
-
-  const safe = safeRecords(records);
-
-  if (!safe.length) return { min: null, max: null };
-
-  const dates = safe.map((r) => r.date).sort();
-
-  return {
-    min: dates[0] || null,
-    max: dates[dates.length - 1] || null
-  };
-
 }
 
 /* ---------- Daily Trend ---------- */
@@ -157,24 +139,19 @@ export function getDateRange(records = []) {
 export function getDailyTrend(records = []) {
 
   const safe = safeRecords(records);
-
   const map = {};
 
-  safe.forEach((r) => {
-
+  safe.forEach(r => {
     if (!r.date) return;
-
     map[r.date] = (map[r.date] || 0) + Number(r.calls || 0);
-
   });
 
   return Object.keys(map)
     .sort()
-    .map((d) => ({
+    .map(d => ({
       date: d,
       calls: map[d]
     }));
-
 }
 
 /* ---------- Monthly Trend ---------- */
@@ -182,170 +159,70 @@ export function getDailyTrend(records = []) {
 export function getMonthlyTrend(records = []) {
 
   const safe = safeRecords(records);
-
   const map = {};
 
-  safe.forEach((r) => {
-
+  safe.forEach(r => {
     if (!r.date) return;
-
     const month = r.date.substring(0, 7);
-
     map[month] = (map[month] || 0) + Number(r.calls || 0);
-
   });
 
   return Object.keys(map)
     .sort()
-    .map((m) => ({
+    .map(m => ({
       month: m,
       calls: map[m]
     }));
-
 }
 
-/* ---------- Top Tenants ---------- */
-
-export function getTopTenants(records = []) {
-
-  const safe = safeRecords(records);
-
-  const map = {};
-
-  safe.forEach((r) => {
-
-    const key = r.tenantName || r.oid || "Unknown";
-
-    if (!map[key]) map[key] = { name: key, calls: 0 };
-
-    map[key].calls += Number(r.calls || 0);
-
-  });
-
-  return Object.values(map).sort((a, b) => b.calls - a.calls);
-
-}
-
-/* ---------- Top Connectors ---------- */
-
-export function getTopConnectors(records = []) {
-
-  const safe = safeRecords(records);
-
-  const map = {};
-
-  safe.forEach((r) => {
-
-    const key = r.connector || "Unknown";
-
-    map[key] = (map[key] || 0) + Number(r.calls || 0);
-
-  });
-
-  return Object.entries(map)
-    .map(([name, calls]) => ({ name, calls }))
-    .sort((a, b) => b.calls - a.calls);
-
-}
-
-/* ---------- Connector Trend ---------- */
-
-export function getConnectorTrend(records = []) {
-
-  const safe = safeRecords(records);
-
-  const connectors = [...new Set(safe.map((r) => r.connector))];
-  const dates = [...new Set(safe.map((r) => r.date))].sort();
-
-  const data = dates.map((d) => {
-
-    const row = { date: d };
-
-    connectors.forEach((c) => {
-
-      row[c] = safe
-        .filter((r) => r.connector === c && r.date === d)
-        .reduce((s, r) => s + Number(r.calls || 0), 0);
-
-    });
-
-    return row;
-
-  });
-
-  return { data, connectors };
-
-}
-
-/* ---------- Unique Lists ---------- */
-
-export function getUniqueTenants(records = []) {
-
-  const safe = safeRecords(records);
-
-  return [...new Set(safe.map((r) => r.tenantName || r.oid))];
-
-}
-
-export function getUniqueConnectors(records = []) {
-
-  const safe = safeRecords(records);
-
-  return [...new Set(safe.map((r) => r.connector))];
-
-}
 /* ---------- Heatmap ---------- */
 
 export function getHeatmapData(records = []) {
 
-  const safe = safeRecords(records)
+  const safe = safeRecords(records);
 
-  const tenants = [...new Set(safe.map(r => r.tenantName || r.oid))]
-  const dates = [...new Set(safe.map(r => r.date))].sort()
+  const tenants = [...new Set(safe.map(r => r.tenantName || r.oid))];
+  const dates = [...new Set(safe.map(r => r.date))].sort();
 
-  const matrix = {}
+  const matrix = {};
 
   safe.forEach(r => {
 
-    if(!r || !r.date) return
+    if (!r || !r.date) return;
 
-    const tenant = r.tenantName || r.oid
-    const key = `${tenant}||${r.date}`
+    const key = `${r.tenantName || r.oid}||${r.date}`;
 
-    matrix[key] = (matrix[key] || 0) + Number(r.calls || 0)
+    matrix[key] = (matrix[key] || 0) + Number(r.calls || 0);
 
-  })
+  });
 
-  return {
-    tenants,
-    dates,
-    matrix
-  }
-
+  return { tenants, dates, matrix };
 }
-/* ---------- Hourly Trend ---------- */
+
+/* ---------- Hourly Trend (FIXED) ---------- */
 
 export function getHourlyTrend(records = []) {
 
   const safe = safeRecords(records);
 
-  const hours = Array.from({ length: 24 }, (_, i) => ({
+  if (!safe.length) return [];
+
+  const total = safe.reduce((s, r) => s + Number(r.calls || 0), 0);
+
+  const avg = Math.round(total / 24);
+
+  return Array.from({ length: 24 }, (_, i) => ({
     hour: `${i}:00`,
-    calls: 0
+    calls: avg
   }));
+}
 
-  safe.forEach((r) => {
+/* ---------- Unique Lists ---------- */
 
-    const d = new Date(r.date + "T00:00:00");
+export function getUniqueTenants(records = []) {
+  return [...new Set(safeRecords(records).map(r => r.tenantName || r.oid))];
+}
 
-    if (isNaN(d)) return;
-
-    const h = d.getHours();
-
-    hours[h].calls += Number(r.calls || 0);
-
-  });
-
-  return hours;
-
+export function getUniqueConnectors(records = []) {
+  return [...new Set(safeRecords(records).map(r => r.connector || "Unknown"))];
 }
